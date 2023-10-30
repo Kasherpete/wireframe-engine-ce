@@ -11,8 +11,8 @@
 #define FOV 0.9
 #define LEN(arr) ((int) (sizeof (arr) / sizeof (arr)[0]))
 
-const int GFX_HEIGHT_HALF = GFX_LCD_HEIGHT / 2;
-const int GFX_WIDTH_HALF = GFX_LCD_WIDTH / 2;
+#define GFX_HEIGHT_HALF 120
+#define GFX_WIDTH_HALF 160
 
 
 struct Player
