@@ -55,6 +55,6 @@ value = f"{{{str(list1)[1:-1]}}}"
 
 print('\n' + value)
 
-if not replace_string_in_file('uint8_t powAZx50list[] =', f'uint8_t powAZx50list[] = {value};\n'):
+if not replace_string_in_file('uint8_t powAZx50list[]', f'uint8_t powAZx50list[] = {value};\n'):
     raise Exception('Error while inserting powAZx50 array into the file!')
 
