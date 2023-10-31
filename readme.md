@@ -6,7 +6,7 @@ This is just a simple algorithm for the TI-84+ CE to render simple voxels quickl
 
 ### Setup
 
-In `main.c`, you will find some `#define`'s at the top. Just configure them to your needs. If you change any of the Z render distances, make sure to regenerate the `powAZx50` array by using the Python script found in /utils.
+In `main.c`, you will find some `#define`'s at the top. Just configure them to your needs. If you change any of the Z render distances or FOV, make sure to run `powAZx50` found in /utils. This script pre-calculate any needed values. If you change anything regarding the Z render distance, FOV, or `powAZx50` variables within `main.c`, make sure to double check the Python script since it automatically handles constants in `main.c`.
 
 ### TODO
 

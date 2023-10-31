@@ -24,30 +24,29 @@
 #define RENDER_DISTANCE_ALGORITHM (z > -RENDER_DIST_Z_BACK) && (z < RENDER_DIST_Z_FRONT) && (x < RENDER_DIST_X) && (x > -RENDER_DIST_X) && (y < RENDER_DIST_Y) && (y > -RENDER_DIST_Y)
 
 
-// when you change the Z render distance, update these values using the Python script
-uint8_t powAZx50list[] = {98, 78, 62, 50, 40, 32, 26, 20, 16, 13, 10};
+// auto-generated, do not tamper
+const uint8_t powAZx50list[] = {98, 78, 62, 50, 40, 32, 26, 20, 16, 13, 10};
 
 
-
-void drawBox(int_fast8_t x, int_fast8_t y, int_fast8_t z) {
+void drawBox(int8_t x, int8_t y, int8_t z) {
 
     // render distance calculations. needs improvement
     if (RENDER_DISTANCE_ALGORITHM) {
 
         // just some optimizations
-        const uint_fast8_t powAZx50 = powAZx50list[z+3];
-        const uint_fast8_t powAZp1x50 = powAZx50list[z+2];
+        const uint8_t powAZx50 = powAZx50list[z+3];
+        const uint8_t powAZp1x50 = powAZx50list[z+2];
 
         // calculate values - data type needs to go from -1 to 241 height, 321 width
         // potential optimization here. willing to make viewport 255x255
-        int_fast16_t w = (x*powAZx50) + GFX_WIDTH_HALF;
-        int_fast16_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
-        int_fast16_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
-        int_fast16_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
-        int_fast16_t r = (x*powAZp1x50) + GFX_WIDTH_HALF;
-        int_fast16_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
-        int_fast16_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
-        int_fast16_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
+        int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
+        int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
+        int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
+        int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
+        int24_t r = (x*powAZp1x50) + GFX_WIDTH_HALF;
+        int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
+        int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
+        int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
 
         // front box
         gfx_Rectangle(u, t, w-u+1, w-u+1);
@@ -69,17 +68,17 @@ int main(void)
     gfx_ZeroScreen();
 
     
-    int_fast8_t player_x = 0;
-    int_fast8_t player_y = 0;
-    int_fast8_t player_z = 0;
+    int8_t player_x = 0;
+    int8_t player_y = 0;
+    int8_t player_z = 0;
 
 
     gfx_SetColor(gfx_red);
     gfx_SetTextFGColor(gfx_red);
 
-    int frame_count = 0;
+    uint8_t frame_count = 0;
     clock_t start_time = clock();
-    int fps = 0;
+    uint8_t fps = 0;
 
     while (!(kb_Data[6] == kb_Clear)) {
 
@@ -101,7 +100,7 @@ int main(void)
 
         gfx_ZeroScreen();
         gfx_SetTextXY(5,5);
-        gfx_PrintInt(fps, 2);
+        gfx_PrintUInt(fps, 2);
         
         drawBox(2-player_x,2+player_y,1-player_z);
         drawBox(1-player_x,2+player_y,1-player_z);
