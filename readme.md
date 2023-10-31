@@ -22,4 +22,6 @@ In `main.c`, you will find some `#define`'s at the top. Just configure them to y
  - [x] *Unplanned*: Implement a lookup table for both powAZx50 variables - which are calculated every voxel
 ### Changelog
 
+***v0.2.0*** - **Massive** speed boost, over 6x speed
+
 ***v0.1.0*** - First demo
