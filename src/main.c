@@ -15,24 +15,28 @@
 #define GFX_WIDTH_HALF 160
 
 // all exclusive
-#define RENDER_DIST_X 4  // dont draw below -4x or higher than 4x
-#define RENDER_DIST_Y 3
+#define RENDER_DIST_X 8  // dont draw below -4x or higher than 4x
+#define RENDER_DIST_Y 8
 #define RENDER_DIST_Z_BACK 3 // back from the camera
 #define RENDER_DIST_Z_FRONT 8 // above 0
 
-// simple rectangular prism. cone-shape would be best.
+// simple rectangular prism. cone-shape would be best in the future
 #define RENDER_DISTANCE_ALGORITHM (z > -RENDER_DIST_Z_BACK) && (z < RENDER_DIST_Z_FRONT) && (x < RENDER_DIST_X) && (x > -RENDER_DIST_X) && (y < RENDER_DIST_Y) && (y > -RENDER_DIST_Y)
 
 
+// when you change the Z render distance, update these values using the Python script
+uint8_t powAZx50list[] = {98, 78, 62, 50, 40, 32, 26, 20, 16, 13, 10};
 
-void drawBox(int x, int y, int z) {
+
+
+void drawBox(int_fast8_t x, int_fast8_t y, int_fast8_t z) {
 
     // render distance calculations. needs improvement
     if (RENDER_DISTANCE_ALGORITHM) {
 
         // just some optimizations
-        const uint_fast8_t powAZx50 = pow(FOV,z) * 50;
-        const uint_fast8_t powAZp1x50 = pow(FOV,(z+1)) * 50;
+        const uint_fast8_t powAZx50 = powAZx50list[z+3];
+        const uint_fast8_t powAZp1x50 = powAZx50list[z+2];
 
         // calculate values - data type needs to go from -1 to 241 height, 321 width
         // potential optimization here. willing to make viewport 255x255
