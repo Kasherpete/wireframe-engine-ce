@@ -67,7 +67,7 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t fill, uint8_t fill_color) {
         int24_t o;
         uint8_t clip;
 
-        int8_t entry;
+        int8_t entry = 0;
 
         for (uint8_t i = 0; i < cache_size; i++) {
             if ((x == cache[i][0]) && (y == cache[i][1]) && (z == cache[i][2])) {
@@ -203,7 +203,7 @@ int main(void)
 {
 
     while ((kb_Data[1] & kb_2nd) || (kb_Data[6] & kb_Enter)) {
-        sleep(.1);
+        sleep(.1);  // change this
     }
 
     gfx_Begin();
