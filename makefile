@@ -2,9 +2,9 @@
 # Makefile Options
 # ----------------------------
 
-NAME = DEMO
+NAME = DEMOPRGM
 #ICON = icon.png
-DESCRIPTION = "CE C Toolchain Demo"
+DESCRIPTION = "A Fast Wireframe Engine for the TI84+ CE"
 COMPRESSED = YES
 
 COMPRESSED_MODE = zx0
