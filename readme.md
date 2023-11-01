@@ -16,13 +16,15 @@ In `main.c`, you will find some `#define`'s at the top. Just configure them to y
  - [ ] Add functionality to render planes and polygons
  - [ ] Darken colors for the further away from the camera it is (volumetric fog)
  - [ ] Optimize algorithm (sacrifice of accuracy is acceptable, and may make the scene loop less calculated and and definitive - more natural)
- - [ ] Find a way to render everything unclipped (will need help!!)
+ - [x] Find a way to render everything unclipped (will need help!!)
  - [ ] ~~Render screen coordinates using 8 bit values instead of 16 - will allow the right side of the screen to be used for stats~~
 
 <br>
 
  - [x] *Unplanned*: Implement a lookup table for both powAZx50 variables - which are calculated every voxel
 ### Changelog
+
+***v0.2.2*** - Code cleanup, remove excess code, optimizations, removed vertex cache, currently the fastest version.
 
 ***v0.2.1*** - Added cache for common vertices. May be slower? We'll see, for now the cache is set to 1.
 

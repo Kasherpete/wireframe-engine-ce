@@ -58,3 +58,4 @@ print('\n' + value)
 if not replace_string_in_file('uint8_t powAZx50list[]', f'uint8_t powAZx50list[] = {value};\n'):
     raise Exception('Error while inserting powAZx50 array into the file!')
 
+print('Finished configuring engine pre-calculations!')
