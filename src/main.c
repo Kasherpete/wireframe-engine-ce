@@ -15,6 +15,10 @@
 #define GFX_HEIGHT_HALF 120
 #define GFX_WIDTH_HALF 160
 
+#define PANEL_BOTTOM 0
+#define PANEL_LEFT 1
+#define PANEL_BACK 2
+
 // all exclusive. rerun powAZx50.py when values are changed
 #define RENDER_DIST_X 16       // actual limit is double this value
 #define RENDER_DIST_Y 10       // same as above
@@ -29,7 +33,7 @@
 uint8_t powAZx50list[] = {98, 78, 62, 50, 40, 32, 26, 20, 16, 13, 10, 8, 7};
 
 
-void drawBox(int8_t x, int8_t y, int8_t z, uint8_t fill, uint8_t fill_color) {
+void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) {
 
     // render distance calculations. needs improvement
     if (RENDER_DISTANCE_ALGORITHM) {
@@ -67,12 +71,13 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t fill, uint8_t fill_color) {
         }
 
         
-        if (!fill) {
+        switch (type) {
+        case 0:
             switch (clip) {
 
             case 0:  // if fully on screen
                 gfx_Rectangle_NoClip(u, t, wup1, wup1);
-                gfx_Rectangle_NoClip(p,o,r-p+1, r-p+1);
+                gfx_Rectangle_NoClip(p,o,rpp1, rpp1);
                 gfx_Line_NoClip(r, q, w, v);
                 gfx_Line_NoClip(r, o, w, t);
                 gfx_Line_NoClip(p, o, u, t);
@@ -81,7 +86,7 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t fill, uint8_t fill_color) {
 
             case 1:  // if partly off screen
                 gfx_Rectangle(u, t, wup1, wup1);
-                gfx_Rectangle(p,o,r-p+1, r-p+1);
+                gfx_Rectangle(p,o,rpp1, rpp1);
                 gfx_Line(r, q, w, v);
                 gfx_Line(r, o, w, t);
                 gfx_Line(p, o, u, t);
@@ -91,10 +96,8 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t fill, uint8_t fill_color) {
             default:  // if off screen
                 break;
             }
-        } else {
-            
-            // stash outline color for later
-            uint8_t outline_color = gfx_SetColor(fill_color);
+            break;
+        case 1:
 
             switch (clip) {
 
@@ -140,7 +143,66 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t fill, uint8_t fill_color) {
             
             default:  // if off screen
                 break;
+            break;
             }
+        }
+    }
+}
+
+void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
+
+    if (RENDER_DISTANCE_ALGORITHM) {
+
+        // get pre-calculated values
+        const uint8_t powAZx50 = powAZx50list[z+3];
+        const uint8_t powAZp1x50 = powAZx50list[z+2];
+
+        int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
+        int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
+
+        switch (position) {
+        case PANEL_BACK:
+        {
+            int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
+
+            gfx_Rectangle(u, t, w-u+1, w-u+1);
+            break;
+        }
+
+        case PANEL_BOTTOM:
+        {
+
+            int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
+
+            int24_t r = (x*powAZp1x50) + GFX_WIDTH_HALF;
+            int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
+            int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
+
+            gfx_HorizLine(p, o, r-p+1);
+            gfx_HorizLine(u, t, w-u+1);
+            gfx_Line(r, o, w, t);
+            gfx_Line(p, o, u, t);
+
+            break;
+        }
+
+        case PANEL_LEFT:
+        {
+
+            int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
+            int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
+            int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
+            int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
+
+            gfx_VertLine(u, t, v-t+1);
+            gfx_VertLine(p, o, q-o+1);
+            gfx_Line(p, o, u, t);
+            gfx_Line(p, q, u, v);
+
+            break;
+        }
+
+            
         }
     }
 }
@@ -169,7 +231,17 @@ int main(void)
     uint8_t fps = 0;
 
     while (!(kb_Data[6] & kb_Clear)) {
+        
+        // FPS calculation
+        frame_count++;
 
+        if (clock() - start_time >= CLOCKS_PER_SEC) {
+            fps = frame_count;
+            frame_count = 0;
+            start_time = clock();
+        }
+
+        // handle input
         if (kb_Data[7] & kb_Up) {
             player_z += 1;
         } else if (kb_Data[7] & kb_Down) {
@@ -193,19 +265,29 @@ int main(void)
         gfx_SetTextXY(35,5);
         gfx_PrintUInt(fps, 2);
         
-        for (int i = 0; i < 30; i++)
-            drawBox(2-player_x,2+player_y,1-player_z,NONE,NONE);
+        // main drawing
+        for (int i = 0; i < 10; i++) {
+            drawPanel(-2-player_x,2+player_y,i-player_z, PANEL_LEFT);
+            drawPanel(-2-player_x,1+player_y,i-player_z, PANEL_LEFT);
+            drawPanel(-2-player_x,0+player_y,i-player_z, PANEL_LEFT);
+            drawPanel(-2-player_x,0+player_y,i-player_z, PANEL_BOTTOM);
+            drawPanel(-1-player_x,0+player_y,i-player_z, PANEL_BOTTOM);
+            drawPanel(0-player_x,0+player_y,i-player_z, PANEL_BOTTOM);
+            drawPanel(1-player_x,0+player_y,i-player_z, PANEL_BOTTOM);
+            drawPanel(2-player_x,0+player_y,i-player_z, PANEL_LEFT);
+            drawPanel(2-player_x,1+player_y,i-player_z, PANEL_LEFT);
+            drawPanel(2-player_x,2+player_y,i-player_z, PANEL_LEFT);
+        }
+        // drawBox(1-player_x,2+player_y,1-player_z, NONE, NONE);
+        // drawBox(0-player_x,2+player_y,1-player_z, NONE, NONE);
+        // drawBox(0-player_x,2+player_y,2-player_z, NONE, NONE);
+        // drawBox(2-player_x,3+player_y,1-player_z, NONE, NONE);
+        // drawBox(2-player_x,1+player_y,1-player_z, NONE, NONE);
+        // drawBox(2-player_x,0+player_y,1-player_z, NONE, NONE);
 
 
         gfx_SwapDraw();  // main FPS killer. ig that's a good thing!
 
-        frame_count++;
-
-        if (clock() - start_time >= CLOCKS_PER_SEC) {
-            fps = frame_count;
-            frame_count = 0;
-            start_time = clock();
-        }
     }
 
     gfx_End();
