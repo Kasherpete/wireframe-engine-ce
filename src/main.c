@@ -6,6 +6,8 @@
 #include <time.h>
 #include <stdint.h>
 
+#include <debug.h>
+
 
 #define FOV 0.8
 #define LEN(arr) ((int) (sizeof (arr) / sizeof (arr)[0]))
@@ -36,7 +38,10 @@ uint8_t powAZx50list[] = {98, 78, 62, 50, 40, 32, 26, 20, 16, 13, 10, 8, 7};
 void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) {
 
     // render distance calculations. needs improvement
+    unsigned long num = clock();
     if (RENDER_DISTANCE_ALGORITHM) {
+        dbg_printf("render Algorithm time: %lu\n", clock() - num);
+        num = clock();
 
         // get pre-calculated values
         const uint8_t powAZx50 = powAZx50list[z+3];
@@ -58,6 +63,9 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
         uint8_t wup1 = w-u+1;
         uint8_t rpp1 = r-p+1;
 
+        dbg_printf("pre-calc: %lu\n", clock() - num);
+        num = clock();
+
         // 0 = on screen
         // 1 = partially on screen
         // 2 = off screen
@@ -69,6 +77,9 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
         } else if ((w > 320) || (u < 0) || (v > 240) || (t < 0)) {
             clip = 2;
         }
+
+        dbg_printf("clip calculation: %lu\n", clock() - num);
+        num = clock();
 
         
         switch (type) {
@@ -82,6 +93,8 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
                 gfx_Line_NoClip(r, o, w, t);
                 gfx_Line_NoClip(p, o, u, t);
                 gfx_Line_NoClip(p, q, u, v);
+                dbg_printf("noclip drawing: %lu\n", clock() - num);
+                num = clock();
                 break;
 
             case 1:  // if partly off screen
@@ -91,9 +104,13 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
                 gfx_Line(r, o, w, t);
                 gfx_Line(p, o, u, t);
                 gfx_Line(p, q, u, v);
+                dbg_printf("clipped drawing: %lu\n", clock() - num);
+                num = clock();
                 break;
             
             default:  // if off screen
+            dbg_printf("no drawing: %lu\n", clock() - num);
+            num = clock();
                 break;
             }
             break;
@@ -119,6 +136,8 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
                 gfx_Line_NoClip(r, o, w, t);
                 gfx_Line_NoClip(p, o, u, t);
                 gfx_Line_NoClip(p, q, u, v);
+                dbg_printf("noclip fill: %lu\n", clock() - num);
+                num = clock();
                 break;
 
             case 1:  // if partly off screen
@@ -139,9 +158,13 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
                 gfx_Line(r, o, w, t);
                 gfx_Line(p, o, u, t);
                 gfx_Line(p, q, u, v);
+                dbg_printf("clip fill: %lu\n", clock() - num);
+                num = clock();
                 break;
             
             default:  // if off screen
+                dbg_printf("none fill: %lu\n", clock() - num);
+                num = clock();
                 break;
             break;
             }
@@ -154,11 +177,16 @@ void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
     if (RENDER_DISTANCE_ALGORITHM) {
 
         // get pre-calculated values
+        unsigned long num = clock();
+        dbg_printf("start drawPanel: %lu\n", clock() - num);
+        num = clock();
         const uint8_t powAZx50 = powAZx50list[z+3];
         const uint8_t powAZp1x50 = powAZx50list[z+2];
 
         int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
         int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
+        dbg_printf("panel pre-calc: %lu\n", clock() - num);
+        num = clock();
 
         switch (position) {
         case PANEL_BACK:
@@ -188,16 +216,21 @@ void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
 
         case PANEL_LEFT:
         {
-
+            dbg_printf("time to register switches: %lu\n", clock() - num);
+            num = clock();
             int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
             int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
             int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
             int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
+            dbg_printf("inter-calc: %lu\n", clock() - num);
+            num = clock();
 
             gfx_VertLine(u, t, v-t+1);
             gfx_VertLine(p, o, q-o+1);
             gfx_Line(p, o, u, t);
             gfx_Line(p, q, u, v);
+            dbg_printf("drawing: %lu\n", clock() - num);
+            num = clock();
 
             break;
         }
@@ -264,29 +297,15 @@ int main(void)
         gfx_PrintString("FPS:");
         gfx_SetTextXY(35,5);
         gfx_PrintUInt(fps, 2);
+
+        unsigned long num = clock();
         
         // main drawing
-        for (int i = 0; i < 10; i++) {
-            drawPanel(-2-player_x,2+player_y,i-player_z, PANEL_LEFT);
-            drawPanel(-2-player_x,1+player_y,i-player_z, PANEL_LEFT);
-            drawPanel(-2-player_x,0+player_y,i-player_z, PANEL_LEFT);
-            drawPanel(-2-player_x,0+player_y,i-player_z, PANEL_BOTTOM);
-            drawPanel(-1-player_x,0+player_y,i-player_z, PANEL_BOTTOM);
-            drawPanel(0-player_x,0+player_y,i-player_z, PANEL_BOTTOM);
-            drawPanel(1-player_x,0+player_y,i-player_z, PANEL_BOTTOM);
-            drawPanel(2-player_x,0+player_y,i-player_z, PANEL_LEFT);
-            drawPanel(2-player_x,1+player_y,i-player_z, PANEL_LEFT);
-            drawPanel(2-player_x,2+player_y,i-player_z, PANEL_LEFT);
-        }
-        // drawBox(1-player_x,2+player_y,1-player_z, NONE, NONE);
-        // drawBox(0-player_x,2+player_y,1-player_z, NONE, NONE);
-        // drawBox(0-player_x,2+player_y,2-player_z, NONE, NONE);
-        // drawBox(2-player_x,3+player_y,1-player_z, NONE, NONE);
-        // drawBox(2-player_x,1+player_y,1-player_z, NONE, NONE);
-        // drawBox(2-player_x,0+player_y,1-player_z, NONE, NONE);
+        drawPanel(-2-player_x,2+player_y,1-player_z, PANEL_LEFT);
 
-
+        num = clock();
         gfx_SwapDraw();  // main FPS killer. ig that's a good thing!
+        dbg_printf("swapdraw time: %lu\n\n", clock() - num);
 
     }
 
