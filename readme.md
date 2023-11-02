@@ -10,7 +10,7 @@ In `main.c`, you will find some `#define`'s at the top. Just configure them to y
 
 ### TODO
 
- - [ ] ***Check if cache really helps performance***
+ - [x] ***Check if cache really helps performance***
 
  - [x] Add common voxel coordinate lookup table to optimize rendering
  - [ ] Add functionality to render planes and polygons
