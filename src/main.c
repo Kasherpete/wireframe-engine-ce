@@ -6,6 +6,8 @@
 #include <time.h>
 #include <stdint.h>
 
+#include <debug.h>
+
 
 #define FOV 0.8
 #define LEN(arr) ((int) (sizeof (arr) / sizeof (arr)[0]))
@@ -32,6 +34,26 @@
 // auto-generated, do not tamper
 uint8_t powAZx50list[] = {98, 78, 62, 50, 40, 32, 26, 20, 16, 13, 10, 8, 7};
 
+
+int8_t player_x = 0;
+int8_t player_y = 0;
+int8_t player_z = 0;
+
+
+int compareCoordinates(const void *a, const void *b) {
+    return (((int8_t *)b)[2] - player_z) - (((int8_t *)a)[2] - player_z);
+}
+
+int compareCoordinatesXY(const void *a, const void *b) {
+    return ((((int8_t *)b)[0] - player_x) + (((int8_t *)b)[1]) - player_x) - ((((int8_t *)a)[0] - player_y) + (((int8_t *)a)[1]) - player_y);
+}
+
+void sortCoordinateList(int8_t coordinates[][3], int numCoordinates) {
+
+    qsort(coordinates, numCoordinates, sizeof(int8_t) * 3, compareCoordinatesXY);
+    qsort(coordinates, numCoordinates, sizeof(int8_t) * 3, compareCoordinates);
+
+}
 
 void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) {
 
@@ -208,6 +230,18 @@ void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
 }
 
 
+// takes about 0.00025 seconds per item to sort
+ int8_t coordinates[][3] = {
+        {1, 2, 5},
+        {2, 3, 3},
+        {3, 4, 5},
+        {4, 5, 4},
+        {0, 2, 5},
+        {2, 2, 5},
+        {7, 2, 5},
+        {8, 5, 5},
+};
+
 int main(void)
 {
 
@@ -218,10 +252,7 @@ int main(void)
 
     gfx_Begin();
     gfx_ZeroScreen();
-
-    int8_t player_x = 0;
-    int8_t player_y = 0;
-    int8_t player_z = 0;
+    sortCoordinateList(coordinates, LEN(coordinates));
 
     gfx_SetColor(gfx_red);
     gfx_SetTextFGColor(gfx_red);
@@ -239,6 +270,7 @@ int main(void)
             fps = frame_count;
             frame_count = 0;
             start_time = clock();
+            sortCoordinateList(coordinates, LEN(coordinates));
         }
 
         // handle input
@@ -266,27 +298,10 @@ int main(void)
         gfx_PrintUInt(fps, 2);
         
         // main drawing
-        for (int i = 0; i < 10; i++) {
-            drawPanel(-2-player_x,2+player_y,i-player_z, PANEL_LEFT);
-            drawPanel(-2-player_x,1+player_y,i-player_z, PANEL_LEFT);
-            drawPanel(-2-player_x,0+player_y,i-player_z, PANEL_LEFT);
-            drawPanel(-2-player_x,0+player_y,i-player_z, PANEL_BOTTOM);
-            drawPanel(-1-player_x,0+player_y,i-player_z, PANEL_BOTTOM);
-            drawPanel(0-player_x,0+player_y,i-player_z, PANEL_BOTTOM);
-            drawPanel(1-player_x,0+player_y,i-player_z, PANEL_BOTTOM);
-            drawPanel(2-player_x,0+player_y,i-player_z, PANEL_LEFT);
-            drawPanel(2-player_x,1+player_y,i-player_z, PANEL_LEFT);
-            drawPanel(2-player_x,2+player_y,i-player_z, PANEL_LEFT);
-        }
-        // drawBox(1-player_x,2+player_y,1-player_z, NONE, NONE);
-        // drawBox(0-player_x,2+player_y,1-player_z, NONE, NONE);
-        // drawBox(0-player_x,2+player_y,2-player_z, NONE, NONE);
-        // drawBox(2-player_x,3+player_y,1-player_z, NONE, NONE);
-        // drawBox(2-player_x,1+player_y,1-player_z, NONE, NONE);
-        // drawBox(2-player_x,0+player_y,1-player_z, NONE, NONE);
+        drawBox(coordinates[0][0]-player_x,coordinates[0][1]+player_y,coordinates[0][2]-player_z, 1, gfx_white);
 
 
-        gfx_SwapDraw();  // main FPS killer. ig that's a good thing!
+        gfx_SwapDraw();
 
     }
 
