@@ -6,8 +6,6 @@
 #include <time.h>
 #include <stdint.h>
 
-#include <debug.h>
-
 
 #define FOV 0.8
 #define LEN(arr) ((int) (sizeof (arr) / sizeof (arr)[0]))
@@ -21,11 +19,25 @@
 #define PANEL_LEFT 1
 #define PANEL_BACK 2
 
+#define FULL_WIREFRAME 0
+#define PART_WIREFRAME 1
+#define FILLED_WIREFRAME 2
+
 // all exclusive. rerun powAZx50.py when values are changed
 #define RENDER_DIST_X 16       // actual limit is double this value
 #define RENDER_DIST_Y 10       // same as above
 #define RENDER_DIST_Z_BACK 3   // back from the camera
 #define RENDER_DIST_Z_FRONT 10 // in front of the camera
+
+#define GFX_BLACK   0x00
+#define GFX_RED     0xE0
+#define GFX_ORANGE  0xE3
+#define GFX_GREEN   0x03
+#define GFX_BLUE    0x10
+#define GFX_PURPLE  0x50
+#define GFX_YELLOW  0xE7
+#define GFX_PINK    0xF0
+#define GFX_WHITE   0xFF
 
 // simple rectangular prism. cone-shape would be best in the future
 #define RENDER_DISTANCE_ALGORITHM (z > -RENDER_DIST_Z_BACK) && (z < RENDER_DIST_Z_FRONT) && (x < RENDER_DIST_X) && (x > -RENDER_DIST_X) && (y < RENDER_DIST_Y) && (y > -RENDER_DIST_Y)
@@ -41,18 +53,21 @@ int8_t player_z = 0;
 
 
 int compareCoordinates(const void *a, const void *b) {
-    return (((int8_t *)b)[2] - player_z) - (((int8_t *)a)[2] - player_z);
-}
 
-int compareCoordinatesXY(const void *a, const void *b) {
-    return ((((int8_t *)b)[0] - player_x) + (((int8_t *)b)[1]) - player_x) - ((((int8_t *)a)[0] - player_y) + (((int8_t *)a)[1]) - player_y);
+    int8_t *coord1 = (int8_t *)a;
+    int8_t *coord2 = (int8_t *)b;
+    
+    
+    if ((coord2[2] - coord1[2]) != 0) {
+        return (coord2[2] - coord1[2]);
+    }
+    
+    return (abs(coord2[0] - player_x) + abs(coord2[1] - player_y)) - (abs(coord1[0] - player_x) + abs(coord1[1] - player_y));
 }
 
 void sortCoordinateList(int8_t coordinates[][3], int numCoordinates) {
 
-    qsort(coordinates, numCoordinates, sizeof(int8_t) * 3, compareCoordinatesXY);
-    qsort(coordinates, numCoordinates, sizeof(int8_t) * 3, compareCoordinates);
-
+    qsort(coordinates, numCoordinates, sizeof(coordinates[0]), compareCoordinates);
 }
 
 void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) {
@@ -120,47 +135,186 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
             }
             break;
         case 1:
+            switch (clip) {
+
+            case 0:  // if fully on screen
+                if (u < 160 && v > 120) {
+                    gfx_Line_NoClip(r, q, w, v);
+                    gfx_Line_NoClip(r, o, w, t);
+                    gfx_Line_NoClip(p, o, u, t);
+                    gfx_VertLine_NoClip(w, t, wup1);
+                    gfx_HorizLine_NoClip(u, t, wup1);
+                } else if (u >= 160 && v > 120) {
+                    gfx_Line_NoClip(r, o, w, t);
+                    gfx_Line_NoClip(p, o, u, t);
+                    gfx_Line_NoClip(p, q, u, v);
+                    gfx_VertLine_NoClip(u, t, wup1);
+                    gfx_HorizLine_NoClip(u, t, wup1);
+                } else if (u >= 160 && v <= 120) {
+                    gfx_Line_NoClip(r, q, w, v);
+                    gfx_Line_NoClip(p, q, u, v);
+                    gfx_Line_NoClip(p, o, u, t);
+                    gfx_HorizLine_NoClip(u, v, wup1);
+                    gfx_VertLine_NoClip(u, t, wup1);
+                } else {
+                    gfx_Line_NoClip(r, o, w, t);
+                    gfx_Line_NoClip(p, q, u, v);
+                    gfx_Line_NoClip(r, q, w, v);
+                    gfx_VertLine_NoClip(w, t, wup1);
+                    gfx_HorizLine_NoClip(u, v, wup1);
+                }
+                
+                // render outline
+                gfx_Rectangle(p, o, rpp1, rpp1);
+
+                break;
+
+            case 1:  // if partly off screen
+                if (u < 160 && v > 120) {  // bottom left
+                    gfx_Line(r, q, w, v);
+                    gfx_Line(r, o, w, t);
+                    gfx_Line(p, o, u, t);
+                    gfx_VertLine(w, t, wup1);
+                    gfx_HorizLine(u, t, wup1);
+                } else if (u >= 160 && v > 120) {  // bottom right
+                    gfx_Line(r, o, w, t);
+                    gfx_Line(p, o, u, t);
+                    gfx_Line(p, q, u, v);
+                    gfx_VertLine(u, t, wup1);
+                    gfx_HorizLine(u, t, wup1);
+                } else if (u >= 160 && v <= 120) {  // top right
+                    gfx_Line(r, q, w, v);
+                    gfx_Line(p, q, u, v);
+                    gfx_Line(p, o, u, t);
+                    gfx_HorizLine(u, v, wup1);
+                    gfx_VertLine(u, t, wup1);
+                } else {  // top left
+                    gfx_Line(r, o, w, t);
+                    gfx_Line(p, q, u, v);
+                    gfx_Line(r, q, w, v);
+                    gfx_VertLine(w, t, wup1);
+                    gfx_HorizLine(u, v, wup1);
+                }
+
+                // render outline
+                gfx_Rectangle(p, o, rpp1, rpp1);
+                
+                break;
+            
+            default:  // if off screen
+                break;
+            }
+            break;
+        case 2:
 
             switch (clip) {
 
             case 0:  // if fully on screen
 
                 // fill area
-                gfx_FillRectangle_NoClip(u, t, wup1, wup1);
-                gfx_FillRectangle_NoClip(p, o, rpp1, rpp1);
-                gfx_FillTriangle_NoClip(r, q, w, v, r, v);
-                gfx_FillTriangle_NoClip(r, o, w, t, w, o);
-                gfx_FillTriangle_NoClip(p, o, u, t, u, o);
-                gfx_FillTriangle_NoClip(p, q, u, v, p, v);
+                if (u < 160 && v > 120) {
+                    gfx_FillTriangle_NoClip(w, v, w, t, u, t);
+                    gfx_FillTriangle_NoClip(p, q, r, q, p, o);
+                    gfx_FillTriangle_NoClip(u, t, w, v, p, o);
+                    gfx_FillTriangle_NoClip(p, o, r, q, w, v);
+                    gfx_SetColor(outline_color);
+                    gfx_Line_NoClip(r, q, w, v);
+                    gfx_Line_NoClip(r, o, w, t);
+                    gfx_Line_NoClip(p, o, u, t);
+                    gfx_VertLine_NoClip(w, t, wup1);
+                    gfx_HorizLine_NoClip(u, t, wup1);
+                } else if (u >= 160 && v > 120) {
+                    gfx_FillTriangle_NoClip(w, t, u, t, u, v);
+                    gfx_FillTriangle_NoClip(p, q, r, o, r, q);
+                    gfx_FillTriangle_NoClip(u, v, w, t, r, o);
+                    gfx_FillTriangle_NoClip(p, q, r, o, u, v);
+                    gfx_SetColor(outline_color);
+                    gfx_Line_NoClip(r, o, w, t);
+                    gfx_Line_NoClip(p, o, u, t);
+                    gfx_Line_NoClip(p, q, u, v);
+                    gfx_VertLine_NoClip(u, t, wup1);
+                    gfx_HorizLine_NoClip(u, t, wup1);
+                } else if (u >= 160 && v <= 120) {
+                    gfx_FillTriangle_NoClip(u, t, u, v, w, v);
+                    gfx_FillTriangle_NoClip(r, q, r, o, p, o);
+                    gfx_FillTriangle_NoClip(r, q, p, o, w, v);
+                    gfx_FillTriangle_NoClip(w, v, u, t, p, o);
+                    gfx_SetColor(outline_color);
+                    gfx_Line_NoClip(r, q, w, v);
+                    gfx_Line_NoClip(p, q, u, v);
+                    gfx_Line_NoClip(p, o, u, t);
+                    gfx_HorizLine_NoClip(u, v, wup1);
+                    gfx_VertLine_NoClip(u, t, wup1);
+                } else {
+                    gfx_FillTriangle_NoClip(w, t, w, v, u, v);
+                    gfx_FillTriangle_NoClip(r, o, p, o, p, q);
+                    gfx_FillTriangle_NoClip(u, v, w, t, p, q);
+                    gfx_FillTriangle_NoClip(p, q, r, o, w, t);
+                    gfx_SetColor(outline_color);
+                    gfx_Line_NoClip(r, o, w, t);
+                    gfx_Line_NoClip(p, q, u, v);
+                    gfx_Line_NoClip(r, q, w, v);
+                    gfx_VertLine_NoClip(w, t, wup1);
+                    gfx_HorizLine_NoClip(u, v, wup1);
+                }
                 
                 // render outline
-                gfx_SetColor(outline_color);
-                gfx_Rectangle_NoClip(u, t, wup1, wup1);
-                gfx_Rectangle_NoClip(p, o, rpp1, rpp1);
-                gfx_Line_NoClip(r, q, w, v);
-                gfx_Line_NoClip(r, o, w, t);
-                gfx_Line_NoClip(p, o, u, t);
-                gfx_Line_NoClip(p, q, u, v);
+                gfx_Rectangle(p, o, rpp1, rpp1);
+
                 break;
 
             case 1:  // if partly off screen
 
                 // fill area
-                gfx_FillRectangle(u, t, wup1, wup1);
-                gfx_FillRectangle(p, o, rpp1, rpp1);
-                gfx_FillTriangle(r, q, w, v, r, v);
-                gfx_FillTriangle(r, o, w, t, w, o);
-                gfx_FillTriangle(p, o, u, t, u, o);
-                gfx_FillTriangle(p, q, u, v, p, v);
+                if (u < 160 && v > 120) {  // bottom left
+                    gfx_FillTriangle(w, v, w, t, u, t);
+                    gfx_FillTriangle(p, q, r, q, p, o);
+                    gfx_FillTriangle(u, t, w, v, p, o);
+                    gfx_FillTriangle(p, o, r, q, w, v);
+                    gfx_SetColor(outline_color);
+                    gfx_Line(r, q, w, v);
+                    gfx_Line(r, o, w, t);
+                    gfx_Line(p, o, u, t);
+                    gfx_VertLine(w, t, wup1);
+                    gfx_HorizLine(u, t, wup1);
+                } else if (u >= 160 && v > 120) {  // bottom right
+                    gfx_FillTriangle(w, t, u, t, u, v);
+                    gfx_FillTriangle(p, q, r, o, r, q);
+                    gfx_FillTriangle(u, v, w, t, r, o);
+                    gfx_FillTriangle(p, q, r, o, u, v);
+                    gfx_SetColor(outline_color);
+                    gfx_Line(r, o, w, t);
+                    gfx_Line(p, o, u, t);
+                    gfx_Line(p, q, u, v);
+                    gfx_VertLine(u, t, wup1);
+                    gfx_HorizLine(u, t, wup1);
+                } else if (u >= 160 && v <= 120) {  // top right
+                    gfx_FillTriangle(u, t, u, v, w, v);
+                    gfx_FillTriangle(r, q, r, o, p, o);
+                    gfx_FillTriangle(r, q, p, o, w, v);
+                    gfx_FillTriangle(w, v, u, t, p, o);
+                    gfx_SetColor(outline_color);
+                    gfx_Line(r, q, w, v);
+                    gfx_Line(p, q, u, v);
+                    gfx_Line(p, o, u, t);
+                    gfx_HorizLine(u, v, wup1);
+                    gfx_VertLine(u, t, wup1);
+                } else {  // top left
+                    gfx_FillTriangle(w, t, w, v, u, v);
+                    gfx_FillTriangle(r, o, p, o, p, q);
+                    gfx_FillTriangle(u, v, w, t, p, q);
+                    gfx_FillTriangle(p, q, r, o, w, t);
+                    gfx_SetColor(outline_color);
+                    gfx_Line(r, o, w, t);
+                    gfx_Line(p, q, u, v);
+                    gfx_Line(r, q, w, v);
+                    gfx_VertLine(w, t, wup1);
+                    gfx_HorizLine(u, v, wup1);
+                }
 
                 // render outline
-                gfx_SetColor(outline_color);
-                gfx_Rectangle(u, t, wup1, wup1);
                 gfx_Rectangle(p, o, rpp1, rpp1);
-                gfx_Line(r, q, w, v);
-                gfx_Line(r, o, w, t);
-                gfx_Line(p, o, u, t);
-                gfx_Line(p, q, u, v);
+                
                 break;
             
             default:  // if off screen
@@ -233,13 +387,8 @@ void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
 // takes about 0.00025 seconds per item to sort
  int8_t coordinates[][3] = {
         {1, 2, 5},
-        {2, 3, 3},
-        {3, 4, 5},
-        {4, 5, 4},
-        {0, 2, 5},
-        {2, 2, 5},
-        {7, 2, 5},
-        {8, 5, 5},
+        {-1, 2, 5},
+        {-3, 2, 5},
 };
 
 int main(void)
@@ -254,8 +403,8 @@ int main(void)
     gfx_ZeroScreen();
     sortCoordinateList(coordinates, LEN(coordinates));
 
-    gfx_SetColor(gfx_red);
-    gfx_SetTextFGColor(gfx_red);
+    gfx_SetColor(GFX_RED);
+    gfx_SetTextFGColor(GFX_RED);
 
     uint8_t frame_count = 0;
     clock_t start_time = clock();
@@ -298,8 +447,14 @@ int main(void)
         gfx_PrintUInt(fps, 2);
         
         // main drawing
-        drawBox(coordinates[0][0]-player_x,coordinates[0][1]+player_y,coordinates[0][2]-player_z, 1, gfx_white);
-
+        // for (int i = 0; i < LEN(coordinates); i++) {
+        gfx_SetColor(GFX_RED);
+        drawBox(coordinates[0][0]-player_x,coordinates[0][1]+player_y,coordinates[0][2]-player_z, FULL_WIREFRAME, GFX_WHITE);
+        gfx_SetColor(GFX_RED);
+        drawBox(coordinates[1][0]-player_x,coordinates[2][1]+player_y,coordinates[1][2]-player_z, PART_WIREFRAME, GFX_WHITE);
+        gfx_SetColor(GFX_RED);
+        drawBox(coordinates[2][0]-player_x,coordinates[1][1]+player_y,coordinates[2][2]-player_z, FILLED_WIREFRAME, GFX_WHITE);
+        // }
 
         gfx_SwapDraw();
 
