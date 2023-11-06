@@ -39,6 +39,8 @@ In `main.c`, you will find some `#define`'s at the top. Just configure them to y
 
 ***v0.2.5*** - Fix clipping algorithm, improve `powAZx50.py` script, fix render algorithm, add coordinate view, add basic `drawPlane()` function - only able to lay flat.
 
+ - Note: v0.2.4 was skipped...I did a funny and accidentally labelled it as v0.2.5.
+
 ***v0.2.3*** - Add fully functioning `sortCoordinateList()` method, optimize filling algorithm, add functionality for drawing only visible parts of an object.
 
 ***v0.2.2*** - Code cleanup, remove excess code, optimizations, removed vertex cache, currently the fastest version.
