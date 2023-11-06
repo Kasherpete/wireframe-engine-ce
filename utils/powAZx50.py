@@ -43,19 +43,30 @@ fov = float(find_constant('FOV'))
 
 print(f'RENDER_DIST_Z_FRONT: {front}')
 print(f'RENDER_DIST_Z_BACK: {back}')
-print(f'FOV: {fov}')
+print(f'FOV: {fov}\n')
 
 
 list1 = []
 
+array_type = int(input("Would you like to use type uint8_t or uint24_t? (8/24): "))
+
+if array_type == 24:
+    maximum = 16777216
+elif array_type == 8:
+    maximum = 255
+else:
+    raise Exception('Incorrect value!')
+
 for i in range(-back, front):
-    list1.append(round(pow(fov, i)*50))
+    list1.append(min(round(pow(fov, i)*50), maximum))
 
 value = f"{{{str(list1)[1:-1]}}}"
 
-print('\n' + value)
+print(f'\n{value}\n')
 
-if not replace_string_in_file('uint8_t powAZx50list[]', f'uint8_t powAZx50list[] = {value};\n'):
-    raise Exception('Error while inserting powAZx50 array into the file!')
+if not replace_string_in_file(f'uint8_t powAZx50list[]', f'uint{array_type}_t powAZx50list[] = {value};\n'):
+    if not replace_string_in_file(f'uint24_t powAZx50list[]', f'uint{array_type}_t powAZx50list[] = {value};\n'):
+        raise Exception('Error while inserting powAZx50 array into the file!')
 
 print('Finished configuring engine pre-calculations!')
+print('IMPORTANT: Remember to update variable types accordingly!!')

@@ -17,6 +17,15 @@ In `main.c`, you will find some `#define`'s at the top. Just configure them to y
  - [ ] Clipping alorithm for panels
  - [ ] Add `drawPlane()`
  - [ ] Look into smoother movements (I'll see what I can do. Right now this is the most important thing.)
+ - [ ] Render polygon instead of lines for panel, plane
+ - [ ] Make variables into constants
+ - [ ] Add `drawPillar()`
+ - [ ] Direction control
+ - [ ] Write custom drawing routine for trapezoids
+ - [ ] Time delta for player movement
+ - [x] Implement clipping detection for planes
+ - [x] Add render distance detection for planes
+ - [ ] Add rotation control for planes
  - [x] Set palette to remove compiler warnings
  - [x] Find a way to render everything unclipped (will need help!!)
  - [x] Check if cache really helps performance
@@ -27,6 +36,8 @@ In `main.c`, you will find some `#define`'s at the top. Just configure them to y
 
  - [x] *Unplanned*: Implement a lookup table for both powAZx50 variables - which are calculated every voxel
 ### Changelog
+
+***v0.2.4*** - Fix clipping algorithm, improve `powAZx50.py` script, fix render algorithm, add coordinate view, add basic `drawPlane()` function - only able to lay flat.
 
 ***v0.2.3*** - Add fully functioning `sortCoordinateList()` method, optimize filling algorithm, add functionality for drawing only visible parts of an object.
 

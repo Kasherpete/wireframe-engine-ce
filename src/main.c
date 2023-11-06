@@ -6,6 +6,8 @@
 #include <time.h>
 #include <stdint.h>
 
+#include <debug.h>
+
 
 #define FOV 0.8
 #define LEN(arr) ((int) (sizeof (arr) / sizeof (arr)[0]))
@@ -13,21 +15,27 @@
 #define NONE 0
 
 #define GFX_HEIGHT_HALF 120
-#define GFX_WIDTH_HALF 160
+#define GFX_WIDTH_HALF  160
 
-#define PANEL_BOTTOM 0
-#define PANEL_LEFT 1
-#define PANEL_BACK 2
+#define PANEL_BOTTOM  0
+#define PANEL_LEFT    1
+#define PANEL_BACK    2
 
-#define FULL_WIREFRAME 0
-#define PART_WIREFRAME 1
-#define FILLED_WIREFRAME 2
+#define WIREFRAME               0
+#define VISIBLE_ONLY_WIREFRAME  1
+#define FILLED                  2
+
+#define NO_CLIP      0
+#define CLIP         1
+#define SKIP_RENDER  2
 
 // all exclusive. rerun powAZx50.py when values are changed
-#define RENDER_DIST_X 16       // actual limit is double this value
-#define RENDER_DIST_Y 10       // same as above
-#define RENDER_DIST_Z_BACK 3   // back from the camera
-#define RENDER_DIST_Z_FRONT 10 // in front of the camera
+#define RENDER_DIST_X                16   // actual limit is double this value
+#define RENDER_DIST_Y                10   // same as above
+#define RENDER_DIST_Z_BACK           20   // back from the camera - used for calculations
+#define RENDER_DIST_Z_FRONT          30   // in front of the camera
+#define VISIBLE_RENDER_DIST_Z_BACK   3    // used solely for optimization
+#define VISIBLE_RENDER_DIST_Z_FRONT  30   //
 
 #define GFX_BLACK   0x00
 #define GFX_RED     0xE0
@@ -40,11 +48,11 @@
 #define GFX_WHITE   0xFF
 
 // simple rectangular prism. cone-shape would be best in the future
-#define RENDER_DISTANCE_ALGORITHM (z > -RENDER_DIST_Z_BACK) && (z < RENDER_DIST_Z_FRONT) && (x < RENDER_DIST_X) && (x > -RENDER_DIST_X) && (y < RENDER_DIST_Y) && (y > -RENDER_DIST_Y)
+#define RENDER_DISTANCE_ALGORITHM (z > -VISIBLE_RENDER_DIST_Z_BACK) && (z < VISIBLE_RENDER_DIST_Z_FRONT) && (x < RENDER_DIST_X) && (x > -RENDER_DIST_X) && (y < RENDER_DIST_Y) && (y > -RENDER_DIST_Y)
 
 
 // auto-generated, do not tamper
-uint8_t powAZx50list[] = {98, 78, 62, 50, 40, 32, 26, 20, 16, 13, 10, 8, 7};
+uint8_t powAZx50list[] = {255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 238, 191, 153, 122, 98, 78, 62, 50, 40, 32, 26, 20, 16, 13, 10, 8, 7, 5, 4, 3, 3, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 
 int8_t player_x = 0;
@@ -76,8 +84,8 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
     if (RENDER_DISTANCE_ALGORITHM) {
 
         // get pre-calculated values
-        const uint8_t powAZx50 = powAZx50list[z+3];
-        const uint8_t powAZp1x50 = powAZx50list[z+2];
+        const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
+        const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK-1];
 
         // calculate values - data type needs to go from -1 to 241 height, 321 width
         // potential optimization here. willing to make viewport 255x255
@@ -98,46 +106,49 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
         // 0 = on screen
         // 1 = partially on screen
         // 2 = off screen
-        uint8_t clip = 1;
+        uint8_t clip = CLIP;
 
         // determines route of action for clipping
         if ((r < 320) && (p >= 0) && (o >= 0) && (q < 240)) {
-            clip = 0;
-        } else if ((w > 320) || (u < 0) || (v > 240) || (t < 0)) {
-            clip = 2;
+            clip = NO_CLIP;
+        } else if ((u > 320) || (w < 0) || (t > 240) || (v < 0)) {
+            clip = SKIP_RENDER;
         }
 
         
         switch (type) {
-        case 0:
+        case WIREFRAME:
             switch (clip) {
 
-            case 0:  // if fully on screen
+            case NO_CLIP:  // if fully on screen
                 gfx_Rectangle_NoClip(u, t, wup1, wup1);
                 gfx_Rectangle_NoClip(p,o,rpp1, rpp1);
                 gfx_Line_NoClip(r, q, w, v);
                 gfx_Line_NoClip(r, o, w, t);
                 gfx_Line_NoClip(p, o, u, t);
                 gfx_Line_NoClip(p, q, u, v);
+                dbg_printf("here2\n");
                 break;
 
-            case 1:  // if partly off screen
+            case CLIP:  // if partly off screen
                 gfx_Rectangle(u, t, wup1, wup1);
                 gfx_Rectangle(p,o,rpp1, rpp1);
                 gfx_Line(r, q, w, v);
                 gfx_Line(r, o, w, t);
                 gfx_Line(p, o, u, t);
                 gfx_Line(p, q, u, v);
+                dbg_printf("here1\n");
                 break;
             
             default:  // if off screen
+                dbg_printf("here\n");
                 break;
             }
             break;
-        case 1:
+        case VISIBLE_ONLY_WIREFRAME:
             switch (clip) {
 
-            case 0:  // if fully on screen
+            case NO_CLIP:  // if fully on screen
                 if (u < 160 && v > 120) {
                     gfx_Line_NoClip(r, q, w, v);
                     gfx_Line_NoClip(r, o, w, t);
@@ -169,7 +180,7 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
 
                 break;
 
-            case 1:  // if partly off screen
+            case CLIP:  // if partly off screen
                 if (u < 160 && v > 120) {  // bottom left
                     gfx_Line(r, q, w, v);
                     gfx_Line(r, o, w, t);
@@ -205,7 +216,7 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
                 break;
             }
             break;
-        case 2:
+        case FILLED:
 
             switch (clip) {
 
@@ -330,8 +341,8 @@ void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
     if (RENDER_DISTANCE_ALGORITHM) {
 
         // get pre-calculated values
-        const uint8_t powAZx50 = powAZx50list[z+3];
-        const uint8_t powAZp1x50 = powAZx50list[z+2];
+        const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
+        const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK-1];
 
         int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
         int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
@@ -383,9 +394,101 @@ void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
     }
 }
 
+//    TODO:
+// - add rotation
+
+void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t width, uint8_t rotation, uint8_t fill, uint8_t outline_color) {
+
+    x -= 1;
+    z -= 1;
+    
+    
+    if (((z + width) < VISIBLE_RENDER_DIST_Z_FRONT) && (((z + width) > -VISIBLE_RENDER_DIST_Z_BACK) && ((z) > -RENDER_DIST_Z_BACK))) {
+        
+        int24_t r;
+        const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
+        const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK+length];
+        const int24_t a = (y)*powAZp1x50;
+        const int24_t b = (y)*powAZx50;
+        
+        uint8_t clip = CLIP;
+
+        gfx_SetColor(GFX_WHITE); // (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF
+
+        if (((a) + GFX_HEIGHT_HALF <= 0) || ((a) + GFX_HEIGHT_HALF >= 240) || (((x*powAZp1x50) + GFX_WIDTH_HALF >= 320) || (((x+width)*powAZp1x50) + GFX_WIDTH_HALF <= 0))) {
+            clip = SKIP_RENDER;
+            gfx_SetColor(GFX_BLUE);
+        } else if (((b) + GFX_HEIGHT_HALF >= 0) && ((b) + GFX_HEIGHT_HALF < 240) && ((((x)*powAZx50)) + GFX_WIDTH_HALF >= 0) && ((((x+width)*powAZx50)) + GFX_WIDTH_HALF < 320)) {
+            clip = NO_CLIP;
+            gfx_SetColor(GFX_GREEN);
+        }
+
+        if (fill == FILLED) {
+            r = (a) + GFX_HEIGHT_HALF;
+            int24_t w = ((x+width)*powAZp1x50) + GFX_WIDTH_HALF;
+            int24_t v = (x*powAZx50) + GFX_WIDTH_HALF;
+            int24_t u = (b) + GFX_HEIGHT_HALF;
+
+            switch (clip) {
+            case CLIP:
+                gfx_FillTriangle((x*powAZp1x50) + GFX_WIDTH_HALF, r, w, r, v, u);
+                gfx_FillTriangle(v, u, w, r, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u);
+                break;
+            case NO_CLIP:
+                gfx_FillTriangle_NoClip((x*powAZp1x50) + GFX_WIDTH_HALF, r, w, r, v, u);
+                gfx_FillTriangle_NoClip(v, u, w, r, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u);
+                break;
+            default:
+                break;
+            }
+
+            gfx_SetColor(outline_color);
+        }
+
+        switch (clip) {
+            case NO_CLIP:
+                for (uint8_t i = 0; i <= length; i++) {
+                    r = (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF;
+                    gfx_HorizLine_NoClip(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r+1);
+                }
+
+                for (uint8_t i = 0; i <= width; i++) {
+
+                    gfx_Line_NoClip(
+                    ((x+i)*powAZp1x50) + GFX_WIDTH_HALF,
+                    (a) + GFX_HEIGHT_HALF,
+                    ((x+i)*powAZx50) + GFX_WIDTH_HALF,
+                    (b) + GFX_HEIGHT_HALF
+                    );
+                }
+                break;
+            case CLIP:
+                for (uint8_t i = 0; i <= length; i++) {
+                    r = (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF;
+                    gfx_HorizLine(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r+1);
+                }
+
+                for (uint8_t i = 0; i <= width; i++) {
+
+                    gfx_Line(
+                    ((x+i)*powAZp1x50) + GFX_WIDTH_HALF,
+                    (a) + GFX_HEIGHT_HALF,
+                    ((x+i)*powAZx50) + GFX_WIDTH_HALF,
+                    (b) + GFX_HEIGHT_HALF
+                    );
+                }
+                break;
+            default:
+                break;
+        }
+    } else {
+        gfx_Rectangle(50, 50, 20, 20);
+    }
+}
+
 
 // takes about 0.00025 seconds per item to sort
- int8_t coordinates[][3] = {
+int8_t coordinates[][3] = {
         {1, 2, 5},
         {-1, 2, 5},
         {-3, 2, 5},
@@ -445,16 +548,27 @@ int main(void)
         gfx_PrintString("FPS:");
         gfx_SetTextXY(35,5);
         gfx_PrintUInt(fps, 2);
+        gfx_SetTextXY(55,5);
+        gfx_PrintString("X:");
+        gfx_SetTextXY(70,5);
+        gfx_PrintInt(player_x, 2);
+        gfx_SetTextXY(90,5);
+        gfx_PrintString("Y:");
+        gfx_SetTextXY(105,5);
+        gfx_PrintInt(player_y, 2);
+        gfx_SetTextXY(125,5);
+        gfx_PrintString("Z:");
+        gfx_SetTextXY(140,5);
+        gfx_PrintInt(player_z, 2);
+        gfx_SetTextXY(275,5);
+        gfx_PrintString("v0.2.5");
         
-        // main drawing
-        // for (int i = 0; i < LEN(coordinates); i++) {
+        
         gfx_SetColor(GFX_RED);
-        drawBox(coordinates[0][0]-player_x,coordinates[0][1]+player_y,coordinates[0][2]-player_z, FULL_WIREFRAME, GFX_WHITE);
-        gfx_SetColor(GFX_RED);
-        drawBox(coordinates[1][0]-player_x,coordinates[2][1]+player_y,coordinates[1][2]-player_z, PART_WIREFRAME, GFX_WHITE);
-        gfx_SetColor(GFX_RED);
-        drawBox(coordinates[2][0]-player_x,coordinates[1][1]+player_y,coordinates[2][2]-player_z, FILLED_WIREFRAME, GFX_WHITE);
-        // }
+        drawPlane(0-player_x, 0-player_y, 0-player_z, 5, 12, PANEL_BOTTOM, FILLED, GFX_GREEN);
+        drawBox(0-player_x, 0-player_y, 0-player_z, WIREFRAME, NONE);
+        
+
 
         gfx_SwapDraw();
 
