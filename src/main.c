@@ -52,18 +52,18 @@
 
 
 // auto-generated, do not tamper
-uint8_t powAZx50list[] = {255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 238, 191, 153, 122, 98, 78, 62, 50, 40, 32, 26, 20, 16, 13, 10, 8, 7, 5, 4, 3, 3, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+const static uint8_t powAZx50list[] = {255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 238, 191, 153, 122, 98, 78, 62, 50, 40, 32, 26, 20, 16, 13, 10, 8, 7, 5, 4, 3, 3, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 
-int8_t player_x = 0;
-int8_t player_y = 0;
-int8_t player_z = 0;
+static int8_t player_x = 0;
+static int8_t player_y = 0;
+static int8_t player_z = 0;
 
 
-int compareCoordinates(const void *a, const void *b) {
+static int compareCoordinates(const void *a, const void *b) {
 
-    int8_t *coord1 = (int8_t *)a;
-    int8_t *coord2 = (int8_t *)b;
+    const int8_t *coord1 = (int8_t *)a;
+    const int8_t *coord2 = (int8_t *)b;
     
     
     if ((coord2[2] - coord1[2]) != 0) {
@@ -73,12 +73,12 @@ int compareCoordinates(const void *a, const void *b) {
     return (abs(coord2[0] - player_x) + abs(coord2[1] - player_y)) - (abs(coord1[0] - player_x) + abs(coord1[1] - player_y));
 }
 
-void sortCoordinateList(int8_t coordinates[][3], int numCoordinates) {
+static void sortCoordinateList(int8_t coordinates[][3], size_t numCoordinates) {
 
     qsort(coordinates, numCoordinates, sizeof(coordinates[0]), compareCoordinates);
 }
 
-void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) {
+static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) {
 
     // render distance calculations. needs improvement
     if (RENDER_DISTANCE_ALGORITHM) {
@@ -90,18 +90,18 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
         // calculate values - data type needs to go from -1 to 241 height, 321 width
         // potential optimization here. willing to make viewport 255x255
 
-        int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
-        int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
-        int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
-        int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
-        int24_t r = (x*powAZp1x50) + GFX_WIDTH_HALF;
-        int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
-        int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
-        int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
+        const int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
+        const int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
+        const int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
+        const int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
+        const int24_t r = (x*powAZp1x50) + GFX_WIDTH_HALF;
+        const int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
+        const int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
+        const int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
 
         // tiny optimization. not sure if this has any benefit
-        uint8_t wup1 = w-u+1;
-        uint8_t rpp1 = r-p+1;
+        const uint8_t wup1 = w-u+1;
+        const uint8_t rpp1 = r-p+1;
 
         // 0 = on screen
         // 1 = partially on screen
@@ -336,7 +336,7 @@ void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) 
     }
 }
 
-void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
+static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
 
     if (RENDER_DISTANCE_ALGORITHM) {
 
@@ -344,13 +344,13 @@ void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
         const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
         const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK-1];
 
-        int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
-        int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
+        const int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
+        const int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
 
         switch (position) {
         case PANEL_BACK:
         {
-            int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
+            const int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
 
             gfx_Rectangle(u, t, w-u+1, w-u+1);
             break;
@@ -359,11 +359,11 @@ void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
         case PANEL_BOTTOM:
         {
 
-            int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
+            const int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
 
-            int24_t r = (x*powAZp1x50) + GFX_WIDTH_HALF;
-            int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
-            int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
+            const int24_t r = (x*powAZp1x50) + GFX_WIDTH_HALF;
+            const int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
+            const int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
 
             gfx_HorizLine(p, o, r-p+1);
             gfx_HorizLine(u, t, w-u+1);
@@ -376,10 +376,10 @@ void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
         case PANEL_LEFT:
         {
 
-            int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
-            int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
-            int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
-            int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
+            const int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
+            const int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
+            const int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
+            const int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
 
             gfx_VertLine(u, t, v-t+1);
             gfx_VertLine(p, o, q-o+1);
@@ -397,7 +397,7 @@ void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
 //    TODO:
 // - add rotation
 
-void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t width, uint8_t rotation, uint8_t fill, uint8_t outline_color) {
+static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t width, uint8_t rotation, uint8_t fill, uint8_t outline_color) {
 
     x -= 1;
     z -= 1;
@@ -425,9 +425,9 @@ void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t width, uint
 
         if (fill == FILLED) {
             r = (a) + GFX_HEIGHT_HALF;
-            int24_t w = ((x+width)*powAZp1x50) + GFX_WIDTH_HALF;
-            int24_t v = (x*powAZx50) + GFX_WIDTH_HALF;
-            int24_t u = (b) + GFX_HEIGHT_HALF;
+            const int24_t w = ((x+width)*powAZp1x50) + GFX_WIDTH_HALF;
+            const int24_t v = (x*powAZx50) + GFX_WIDTH_HALF;
+            const int24_t u = (b) + GFX_HEIGHT_HALF;
 
             switch (clip) {
             case CLIP:
@@ -488,7 +488,7 @@ void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t width, uint
 
 
 // takes about 0.00025 seconds per item to sort
-int8_t coordinates[][3] = {
+static int8_t coordinates[][3] = {
         {1, 2, 5},
         {-1, 2, 5},
         {-3, 2, 5},
