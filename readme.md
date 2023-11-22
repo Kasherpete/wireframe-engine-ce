@@ -10,7 +10,7 @@ In `main.c`, you will find some `#define`'s at the top. Just configure them to y
 
 ### TODO
 
-
+ - [ ] Add algorithm for blocks
  - [x] Add functionality to render planes and polygons
  - [ ] Darken colors for the further away from the camera it is (volumetric fog)
  - [ ] Optimize algorithm (sacrifice of accuracy is acceptable, and may make the scene loop less calculated and and definitive - more natural)
@@ -36,6 +36,8 @@ In `main.c`, you will find some `#define`'s at the top. Just configure them to y
 
  - [x] *Unplanned*: Implement a lookup table for both powAZx50 variables - which are calculated every voxel
 ### Changelog
+
+***v0.2.7*** - Add `drawBasePlane()` function, add a demo file, update coordinate list handling
 
 ***v0.2.6*** - Fully implement planes, optimize existing algorithms, updated trapezoid routine, other small changes
 
