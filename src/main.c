@@ -100,8 +100,8 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
         const int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
 
         // tiny optimization. not sure if this has any benefit
-        const uint8_t wup1 = w-u+1;
-        const uint8_t rpp1 = r-p+1;
+        const uint8_t wup1 = w-u;
+        const uint8_t rpp1 = r-p;
 
         // 0 = on screen
         // 1 = partially on screen
@@ -352,7 +352,7 @@ static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
         {
             const int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
 
-            gfx_Rectangle(u, t, w-u+1, w-u+1);
+            gfx_Rectangle(u, t, w-u, w-u);
             break;
         }
 
@@ -365,8 +365,8 @@ static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
             const int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
             const int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
 
-            gfx_HorizLine(p, o, r-p+1);
-            gfx_HorizLine(u, t, w-u+1);
+            gfx_HorizLine(p, o, r-p);
+            gfx_HorizLine(u, t, w-u);
             gfx_Line(r, o, w, t);
             gfx_Line(p, o, u, t);
 
@@ -381,8 +381,8 @@ static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
             const int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
             const int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
 
-            gfx_VertLine(u, t, v-t+1);
-            gfx_VertLine(p, o, q-o+1);
+            gfx_VertLine(u, t, v-t);
+            gfx_VertLine(p, o, q-o);
             gfx_Line(p, o, u, t);
             gfx_Line(p, q, u, v);
 
@@ -393,6 +393,92 @@ static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
         }
     }
 }
+
+
+void drawTrapezoid(int x1, int x2, int x3, int x4, int y1, int y2) {
+
+    int n1 = (((x2-x1)*100/(y1-y2)));
+    int n2 = (((x3-x4)*100/(y1-y2)));
+
+    int j = x1 * 100;
+    int k = x4 * 100;
+    int s = 0;
+
+    for (int i = y1; i > y2; i--) {
+        j += n1;
+        k += n2;
+        s = j / 100;
+        gfx_HorizLine(s, i, k / 100-s);
+    }
+}
+
+
+
+void drawTrapezoid_NoClip(int x1, int x2, int x3, int x4, int y1, int y2) {
+
+    int n1 = (((x2-x1)*100/(y1-y2)));
+    int n2 = (((x3-x4)*100/(y1-y2)));
+
+    int j = x1 * 100;
+    int k = x4 * 100;
+    int s = 0;
+
+    for (int i = y1; i > y2; i--) {
+        j += n1;
+        k += n2;
+        s = j / 100;
+        gfx_HorizLine_NoClip(s, i, k / 100-s);
+    }
+}
+
+void drawRotateTrapezoid_NoClip(int y1, int y2, int y3, int y4, int x2, int x1) {
+
+    int n1 = (((y2-y1)*100/(x1-x2)));
+    int n2 = (((y3-y4)*100/(x1-x2)));
+
+    int j = y1 * 100;
+    int k = y4 * 100;
+    int s = 0;
+
+    for (int i = x1; i > x2; i--) {
+        j += n1;
+        k += n2;
+        s = j / 100;
+        gfx_VertLine_NoClip(i, s, k / 100-s);
+    }
+}
+
+void drawRotateTrapezoid(int y1, int y2, int y3, int y4, int x2, int x1) {
+
+    int n1 = (((y2-y1)*100/(x1-x2)));
+    int n2 = (((y3-y4)*100/(x1-x2)));
+
+    int j = y1 * 100;
+    int k = y4 * 100;
+    int s = 0;
+
+    for (int i = x1; i > x2; i--) {
+        j += n1;
+        k += n2;
+        s = j / 100;
+        gfx_VertLine(i, s, k / 100-s);
+    }
+}
+
+/*     x2  x3
+    y2 /----\
+    y1/______\
+     x1       x4
+*/
+
+/* x1  x2
+    |\   y1
+    | \  y2
+    | |
+    | /  y3
+    |/   y4
+*/
+
 
 //    TODO:
 // - add rotation
@@ -431,12 +517,14 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
 
             switch (clip) {
             case CLIP:
-                gfx_FillTriangle((x*powAZp1x50) + GFX_WIDTH_HALF, r, w, r, v, u);
-                gfx_FillTriangle(v, u, w, r, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u);
+                // gfx_FillTriangle((x*powAZp1x50) + GFX_WIDTH_HALF, r, w, r, v, u);
+                // gfx_FillTriangle(v, u, w, r, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u);
+                drawTrapezoid(v, (x*powAZp1x50) + GFX_WIDTH_HALF, w, ((x+width)*powAZx50) + GFX_WIDTH_HALF+1, u, r);
                 break;
             case NO_CLIP:
-                gfx_FillTriangle_NoClip((x*powAZp1x50) + GFX_WIDTH_HALF, r, w, r, v, u);
-                gfx_FillTriangle_NoClip(v, u, w, r, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u);
+                // gfx_FillTriangle_NoClip((x*powAZp1x50) + GFX_WIDTH_HALF, r, w, r, v, u);
+                // gfx_FillTriangle_NoClip(v, u, w, r, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u);
+                drawTrapezoid(v, (x*powAZp1x50) + GFX_WIDTH_HALF, w, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u, r);
                 break;
             default:
                 break;
@@ -449,7 +537,7 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
             case NO_CLIP:
                 for (uint8_t i = 0; i <= length; i++) {
                     r = (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF;
-                    gfx_HorizLine_NoClip(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r+1);
+                    gfx_HorizLine_NoClip(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r);
                 }
 
                 for (uint8_t i = 0; i <= width; i++) {
@@ -465,7 +553,7 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
             case CLIP:
                 for (uint8_t i = 0; i <= length; i++) {
                     r = (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF;
-                    gfx_HorizLine(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r+1);
+                    gfx_HorizLine(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r);
                 }
 
                 for (uint8_t i = 0; i <= width; i++) {
@@ -577,3 +665,4 @@ int main(void)
     gfx_End();
     return 0;
 }
+

@@ -21,7 +21,7 @@ In `main.c`, you will find some `#define`'s at the top. Just configure them to y
  - [ ] Make variables into constants
  - [ ] Add `drawPillar()`
  - [ ] Direction control
- - [ ] Write custom drawing routine for trapezoids
+ - [x] Write custom drawing routine for trapezoids
  - [ ] Time delta for player movement
  - [x] Implement clipping detection for planes
  - [x] Add render distance detection for planes
