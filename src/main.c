@@ -127,7 +127,6 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
                 gfx_Line_NoClip(r, o, w, t);
                 gfx_Line_NoClip(p, o, u, t);
                 gfx_Line_NoClip(p, q, u, v);
-                dbg_printf("here2\n");
                 break;
 
             case CLIP:  // if partly off screen
@@ -137,11 +136,9 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
                 gfx_Line(r, o, w, t);
                 gfx_Line(p, o, u, t);
                 gfx_Line(p, q, u, v);
-                dbg_printf("here1\n");
                 break;
             
             default:  // if off screen
-                dbg_printf("here\n");
                 break;
             }
             break;
@@ -336,85 +333,35 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
     }
 }
 
-static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position) {
+static void drawTrapezoid(int x1, int x2, int x3, int x4, int y1, int y2) {
 
-    if (RENDER_DISTANCE_ALGORITHM) {
 
-        // get pre-calculated values
-        const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
-        const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK-1];
+    int n1 = (((x2-x1)*100/(y1-y2)));
+    int n2 = (((x3-x4)*100/(y1-y2)));
 
-        const int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
-        const int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
+    int j = x1 * 100;
+    int k = x4 * 100;
+    int s = 0;
 
-        switch (position) {
-        case PANEL_BACK:
-        {
-            const int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
-
-            gfx_Rectangle(u, t, w-u, w-u);
-            break;
-        }
-
-        case PANEL_BOTTOM:
-        {
-
-            const int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
-
-            const int24_t r = (x*powAZp1x50) + GFX_WIDTH_HALF;
-            const int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
-            const int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
-
-            gfx_HorizLine(p, o, r-p);
-            gfx_HorizLine(u, t, w-u);
-            gfx_Line(r, o, w, t);
-            gfx_Line(p, o, u, t);
-
-            break;
-        }
-
-        case PANEL_LEFT:
-        {
-
-            const int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
-            const int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
-            const int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
-            const int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
-
-            gfx_VertLine(u, t, v-t);
-            gfx_VertLine(p, o, q-o);
-            gfx_Line(p, o, u, t);
-            gfx_Line(p, q, u, v);
-
-            break;
-        }
-
+    if (y1 < y2) {
+        for (int i = y1; i < y2; i++) {
             
+            j -= n1;
+            k -= n2;
+            s = j / 100;
+            gfx_HorizLine(s, i, k / 100-s);
+        }
+    } else {
+        for (int i = y1; i > y2; i--) {
+            j += n1;
+            k += n2;
+            s = j / 100;
+            gfx_HorizLine(s, i, k / 100-s);
         }
     }
 }
 
-
-void drawTrapezoid(int x1, int x2, int x3, int x4, int y1, int y2) {
-
-    int n1 = (((x2-x1)*100/(y1-y2)));
-    int n2 = (((x3-x4)*100/(y1-y2)));
-
-    int j = x1 * 100;
-    int k = x4 * 100;
-    int s = 0;
-
-    for (int i = y1; i > y2; i--) {
-        j += n1;
-        k += n2;
-        s = j / 100;
-        gfx_HorizLine(s, i, k / 100-s);
-    }
-}
-
-
-
-void drawTrapezoid_NoClip(int x1, int x2, int x3, int x4, int y1, int y2) {
+static void drawTrapezoid_NoClip(int x1, int x2, int x3, int x4, int y1, int y2) {
 
     int n1 = (((x2-x1)*100/(y1-y2)));
     int n2 = (((x3-x4)*100/(y1-y2)));
@@ -423,15 +370,25 @@ void drawTrapezoid_NoClip(int x1, int x2, int x3, int x4, int y1, int y2) {
     int k = x4 * 100;
     int s = 0;
 
-    for (int i = y1; i > y2; i--) {
-        j += n1;
-        k += n2;
-        s = j / 100;
-        gfx_HorizLine_NoClip(s, i, k / 100-s);
+    if (y1 < y2) {
+        for (int i = y1; i < y2; i++) {
+            
+            j -= n1;
+            k -= n2;
+            s = j / 100;
+            gfx_HorizLine_NoClip(s, i, k / 100-s);
+        }
+    } else {
+        for (int i = y1; i > y2; i--) {
+            j += n1;
+            k += n2;
+            s = j / 100;
+            gfx_HorizLine_NoClip(s, i, k / 100-s);
+        }
     }
 }
 
-void drawRotateTrapezoid_NoClip(int y1, int y2, int y3, int y4, int x2, int x1) {
+static void drawRotateTrapezoid_NoClip(int y1, int y2, int y3, int y4, int x2, int x1) {
 
     int n1 = (((y2-y1)*100/(x1-x2)));
     int n2 = (((y3-y4)*100/(x1-x2)));
@@ -440,15 +397,25 @@ void drawRotateTrapezoid_NoClip(int y1, int y2, int y3, int y4, int x2, int x1) 
     int k = y4 * 100;
     int s = 0;
 
-    for (int i = x1; i > x2; i--) {
-        j += n1;
-        k += n2;
-        s = j / 100;
-        gfx_VertLine_NoClip(i, s, k / 100-s);
+    if (x1 < x2) {
+        for (int i = x1; i < x2; i++) {
+            
+            j -= n1;
+            k -= n2;
+            s = j / 100;
+            gfx_VertLine_NoClip(i, s, k / 100-s);
+        }
+    } else {
+        for (int i = x1; i > x2; i--) {
+            j += n1;
+            k += n2;
+            s = j / 100;
+            gfx_VertLine_NoClip(i, s, k / 100-s);
+        }
     }
 }
 
-void drawRotateTrapezoid(int y1, int y2, int y3, int y4, int x2, int x1) {
+static void drawRotateTrapezoid(int y1, int y2, int y3, int y4, int x2, int x1) {
 
     int n1 = (((y2-y1)*100/(x1-x2)));
     int n2 = (((y3-y4)*100/(x1-x2)));
@@ -457,11 +424,21 @@ void drawRotateTrapezoid(int y1, int y2, int y3, int y4, int x2, int x1) {
     int k = y4 * 100;
     int s = 0;
 
-    for (int i = x1; i > x2; i--) {
-        j += n1;
-        k += n2;
-        s = j / 100;
-        gfx_VertLine(i, s, k / 100-s);
+    if (x1 < x2) {
+        for (int i = x1; i < x2; i++) {
+            
+            j -= n1;
+            k -= n2;
+            s = j / 100;
+            gfx_VertLine(i, s, k / 100-s);
+        }
+    } else {
+        for (int i = x1; i > x2; i--) {
+            j += n1;
+            k += n2;
+            s = j / 100;
+            gfx_VertLine(i, s, k / 100-s);
+        }
     }
 }
 
@@ -480,8 +457,80 @@ void drawRotateTrapezoid(int y1, int y2, int y3, int y4, int x2, int x1) {
 */
 
 
-//    TODO:
-// - add rotation
+static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position, uint8_t fill, uint8_t color) {
+
+    if (RENDER_DISTANCE_ALGORITHM) {
+
+        // get pre-calculated values
+        const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
+        const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK-1];
+
+        const int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
+        const int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
+
+        switch (position) {
+        case PANEL_BACK:
+        {
+            const int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
+            
+            if (fill == FILLED) {
+                gfx_FillRectangle(u, t, w-u, w-u);
+                gfx_SetColor(color);
+            }
+            gfx_Rectangle(u, t, w-u, w-u);
+            break;
+        }
+
+        case PANEL_BOTTOM:
+        {
+
+            const int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
+
+            const int24_t r = (x*powAZp1x50) + GFX_WIDTH_HALF;
+            const int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
+            const int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
+
+            if (fill == FILLED) {
+                drawTrapezoid(u, p, r, w, t, o);
+                gfx_SetColor(color);
+            }
+
+            gfx_HorizLine(p, o, r-p);
+            gfx_HorizLine(u, t, w-u);
+            gfx_Line(r, o, w, t);
+            gfx_Line(p, o, u, t);
+
+            break;
+        }
+
+        case PANEL_LEFT:
+        {
+
+            const int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
+            const int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
+            const int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
+            const int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
+
+            if (fill == FILLED) {
+                drawRotateTrapezoid(t, o, q, v, p, u);
+                gfx_SetColor(color);
+            }
+
+            gfx_VertLine(u, t, v-t);
+            gfx_VertLine(p, o, q-o);
+            gfx_Line(p, o, u, t);
+            gfx_Line(p, q, u, v);
+
+            break;
+        }
+
+            
+        }
+    }
+}
+
+
+// TODO: Do front and side
 
 static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t width, uint8_t rotation, uint8_t fill, uint8_t outline_color) {
 
@@ -652,10 +701,10 @@ int main(void)
         gfx_PrintString("v0.2.5");
         
         
-        gfx_SetColor(GFX_RED);
-        drawPlane(0-player_x, 0-player_y, 0-player_z, 5, 12, PANEL_BOTTOM, FILLED, GFX_GREEN);
-        drawBox(0-player_x, 0-player_y, 0-player_z, WIREFRAME, NONE);
-        
+        gfx_SetColor(GFX_BLUE);
+        // drawPlane(0-player_x, 0-player_y, 0-player_z, 5, 12, PANEL_BOTTOM, FILLED, GFX_GREEN);
+        // drawBox(0-player_x, 0-player_y, 0-player_z, WIREFRAME, NONE);
+        drawPanel(0-player_x, 0-player_y, 0-player_z, PANEL_LEFT, FILLED, GFX_RED);
 
 
         gfx_SwapDraw();
