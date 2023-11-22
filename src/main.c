@@ -11,6 +11,9 @@
 
 #define FOV 0.8
 #define LEN(arr) ((int) (sizeof (arr) / sizeof (arr)[0]))
+#define MAX(x, y) (((x) > (y)) ? (x) : (y))
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+
 
 #define NONE 0
 
@@ -348,13 +351,22 @@ static void drawTrapezoid(int x1, int x2, int x3, int x4, int y1, int y2) {
             
             j -= n1;
             k -= n2;
+            
+            if (i < 0 || i > GFX_LCD_HEIGHT)
+            continue;
+
             s = j / 100;
             gfx_HorizLine(s, i, k / 100-s);
         }
     } else {
         for (int i = y1; i > y2; i--) {
+
             j += n1;
             k += n2;
+            
+            if (i < 0 || i > GFX_LCD_HEIGHT)
+            continue;
+
             s = j / 100;
             gfx_HorizLine(s, i, k / 100-s);
         }
@@ -375,13 +387,22 @@ static void drawTrapezoid_NoClip(int x1, int x2, int x3, int x4, int y1, int y2)
             
             j -= n1;
             k -= n2;
+            
+            if (i < 0 || i > GFX_LCD_HEIGHT)
+            continue;
+
             s = j / 100;
             gfx_HorizLine_NoClip(s, i, k / 100-s);
         }
     } else {
         for (int i = y1; i > y2; i--) {
+
             j += n1;
             k += n2;
+            
+            if (i < 0 || i > GFX_LCD_HEIGHT)
+            continue;
+
             s = j / 100;
             gfx_HorizLine_NoClip(s, i, k / 100-s);
         }
@@ -402,13 +423,22 @@ static void drawRotateTrapezoid_NoClip(int y1, int y2, int y3, int y4, int x2, i
             
             j -= n1;
             k -= n2;
+            
+            if (i < 0)
+            continue;
+
             s = j / 100;
             gfx_VertLine_NoClip(i, s, k / 100-s);
         }
     } else {
         for (int i = x1; i > x2; i--) {
+
             j += n1;
             k += n2;
+
+            if (i > GFX_LCD_WIDTH)
+            continue;
+
             s = j / 100;
             gfx_VertLine_NoClip(i, s, k / 100-s);
         }
@@ -426,16 +456,27 @@ static void drawRotateTrapezoid(int y1, int y2, int y3, int y4, int x2, int x1) 
 
     if (x1 < x2) {
         for (int i = x1; i < x2; i++) {
-            
+
             j -= n1;
             k -= n2;
+            
+            if (i < 0)
+            continue;
+
+            
             s = j / 100;
             gfx_VertLine(i, s, k / 100-s);
         }
     } else {
         for (int i = x1; i > x2; i--) {
+
             j += n1;
             k += n2;
+
+            if (i > GFX_LCD_WIDTH)
+            continue;
+
+            
             s = j / 100;
             gfx_VertLine(i, s, k / 100-s);
         }
@@ -530,96 +571,206 @@ static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position, uint8_t fi
 }
 
 
-// TODO: Do front and side
-
 static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t width, uint8_t rotation, uint8_t fill, uint8_t outline_color) {
 
-    x -= 1;
-    z -= 1;
-    
-    
-    if (((z + width) < VISIBLE_RENDER_DIST_Z_FRONT) && (((z + width) > -VISIBLE_RENDER_DIST_Z_BACK) && ((z) > -RENDER_DIST_Z_BACK))) {
+    switch (rotation) {
+    case PANEL_BOTTOM:
+        x -= 1;
+        z -= 1;
         
-        int24_t r;
-        const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
-        const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK+length];
-        const int24_t a = (y)*powAZp1x50;
-        const int24_t b = (y)*powAZx50;
-        
-        uint8_t clip = CLIP;
+        if (((z + width) < VISIBLE_RENDER_DIST_Z_FRONT) && (((z + width) > -VISIBLE_RENDER_DIST_Z_BACK) && ((z) > -RENDER_DIST_Z_BACK))) {
+            
+            int24_t r;
+            const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
+            const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK+length];
+            const int24_t a = (y)*powAZp1x50;
+            const int24_t b = (y)*powAZx50;
+            
+            uint8_t clip = CLIP;
 
-        gfx_SetColor(GFX_WHITE); // (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF
 
-        if (((a) + GFX_HEIGHT_HALF <= 0) || ((a) + GFX_HEIGHT_HALF >= 240) || (((x*powAZp1x50) + GFX_WIDTH_HALF >= 320) || (((x+width)*powAZp1x50) + GFX_WIDTH_HALF <= 0))) {
-            clip = SKIP_RENDER;
-            gfx_SetColor(GFX_BLUE);
-        } else if (((b) + GFX_HEIGHT_HALF >= 0) && ((b) + GFX_HEIGHT_HALF < 240) && ((((x)*powAZx50)) + GFX_WIDTH_HALF >= 0) && ((((x+width)*powAZx50)) + GFX_WIDTH_HALF < 320)) {
-            clip = NO_CLIP;
-            gfx_SetColor(GFX_GREEN);
-        }
-
-        if (fill == FILLED) {
-            r = (a) + GFX_HEIGHT_HALF;
-            const int24_t w = ((x+width)*powAZp1x50) + GFX_WIDTH_HALF;
-            const int24_t v = (x*powAZx50) + GFX_WIDTH_HALF;
-            const int24_t u = (b) + GFX_HEIGHT_HALF;
-
-            switch (clip) {
-            case CLIP:
-                // gfx_FillTriangle((x*powAZp1x50) + GFX_WIDTH_HALF, r, w, r, v, u);
-                // gfx_FillTriangle(v, u, w, r, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u);
-                drawTrapezoid(v, (x*powAZp1x50) + GFX_WIDTH_HALF, w, ((x+width)*powAZx50) + GFX_WIDTH_HALF+1, u, r);
-                break;
-            case NO_CLIP:
-                // gfx_FillTriangle_NoClip((x*powAZp1x50) + GFX_WIDTH_HALF, r, w, r, v, u);
-                // gfx_FillTriangle_NoClip(v, u, w, r, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u);
-                drawTrapezoid(v, (x*powAZp1x50) + GFX_WIDTH_HALF, w, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u, r);
-                break;
-            default:
-                break;
+            if ((a + GFX_HEIGHT_HALF <= 0) || (a + GFX_HEIGHT_HALF >= 240) || (((x*powAZp1x50) + GFX_WIDTH_HALF >= 320) || (((x+width)*powAZp1x50) + GFX_WIDTH_HALF <= 0))) {
+                clip = SKIP_RENDER;
+            } else if ((b + GFX_HEIGHT_HALF >= 0) && (b + GFX_HEIGHT_HALF < 240) && (((x*powAZx50)) + GFX_WIDTH_HALF >= 0) && ((((x+width)*powAZx50)) + GFX_WIDTH_HALF < 320)) {
+                clip = NO_CLIP;
             }
 
-            gfx_SetColor(outline_color);
+            if (fill == FILLED) {
+                r = a + GFX_HEIGHT_HALF;
+                const int24_t w = (x+width)*powAZp1x50 + GFX_WIDTH_HALF;
+                const int24_t v = x*powAZx50 + GFX_WIDTH_HALF;
+                const int24_t u = b + GFX_HEIGHT_HALF;
+
+                switch (clip) {
+                case CLIP:
+                    // gfx_FillTriangle((x*powAZp1x50) + GFX_WIDTH_HALF, r, w, r, v, u);
+                    // gfx_FillTriangle(v, u, w, r, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u);
+                    drawTrapezoid(v, (x*powAZp1x50) + GFX_WIDTH_HALF, w, ((x+width)*powAZx50) + GFX_WIDTH_HALF+1, u, r);
+                    break;
+                case NO_CLIP:
+                    // gfx_FillTriangle_NoClip((x*powAZp1x50) + GFX_WIDTH_HALF, r, w, r, v, u);
+                    // gfx_FillTriangle_NoClip(v, u, w, r, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u);
+                    drawTrapezoid(v, (x*powAZp1x50) + GFX_WIDTH_HALF, w, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u, r);
+                    break;
+                default:
+                    break;
+                }
+
+                gfx_SetColor(outline_color);
+            }
+
+            switch (clip) {
+                case NO_CLIP:
+                    for (uint8_t i = 0; i <= length; i++) {
+                        r = (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF;
+                        gfx_HorizLine_NoClip(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r);
+                    }
+
+                    for (uint8_t i = 0; i <= width; i++) {
+
+                        gfx_Line_NoClip(
+                        ((x+i)*powAZp1x50) + GFX_WIDTH_HALF,
+                        (a) + GFX_HEIGHT_HALF,
+                        ((x+i)*powAZx50) + GFX_WIDTH_HALF,
+                        (b) + GFX_HEIGHT_HALF
+                        );
+                    }
+                    break;
+                case CLIP:
+                    for (uint8_t i = 0; i <= length; i++) {
+                        r = (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF;
+                        gfx_HorizLine(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r);
+                    }
+
+                    for (uint8_t i = 0; i <= width; i++) {
+
+                        gfx_Line(
+                        ((x+i)*powAZp1x50) + GFX_WIDTH_HALF,
+                        (a) + GFX_HEIGHT_HALF,
+                        ((x+i)*powAZx50) + GFX_WIDTH_HALF,
+                        (b) + GFX_HEIGHT_HALF
+                        );
+                    }
+                    break;
+                default:
+                    break;
+            }
+        } else {
+            gfx_Rectangle(50, 50, 20, 20);
         }
+        break;
+    case PANEL_LEFT:
+        if (((z + length) < VISIBLE_RENDER_DIST_Z_FRONT) && (((z + length) > -VISIBLE_RENDER_DIST_Z_BACK) && ((z) > -RENDER_DIST_Z_BACK))) {
 
-        switch (clip) {
-            case NO_CLIP:
-                for (uint8_t i = 0; i <= length; i++) {
-                    r = (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF;
-                    gfx_HorizLine_NoClip(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r);
+            // get pre-calculated values
+            const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK-1];
+            const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK+length-1];
+
+            const int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
+            const int24_t t = ((y-width)*powAZx50) + GFX_HEIGHT_HALF;
+
+            
+            const int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
+            const int24_t o = ((y-width)*powAZp1x50) + GFX_HEIGHT_HALF;
+            const int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
+            const int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
+
+            uint8_t clip = CLIP;
+
+
+            if (p > GFX_LCD_WIDTH && p < 0 && q < 0 && o > GFX_LCD_HEIGHT) {
+                clip = SKIP_RENDER;
+            } else if (u > 0 && u < GFX_LCD_WIDTH && t > 0 && v < GFX_LCD_HEIGHT) {
+                clip = NO_CLIP;
+                gfx_Rectangle(20, 20, 20, 20);
+            }
+
+            if (fill == FILLED) {
+                switch (clip) {
+                case CLIP:
+                    drawRotateTrapezoid(t, o, q, v, p, u);
+                    break;
+                case NO_CLIP:
+                    drawRotateTrapezoid_NoClip(t, o, q, v, p, u);
+                    break;
+                default:
+                    break;
                 }
+                gfx_SetColor(outline_color);
+            }
 
-                for (uint8_t i = 0; i <= width; i++) {
+            for (uint8_t i = 0; i <= width; i++) {
 
-                    gfx_Line_NoClip(
-                    ((x+i)*powAZp1x50) + GFX_WIDTH_HALF,
-                    (a) + GFX_HEIGHT_HALF,
-                    ((x+i)*powAZx50) + GFX_WIDTH_HALF,
-                    (b) + GFX_HEIGHT_HALF
-                    );
+                gfx_Line(p, ((y-i)*powAZp1x50) + GFX_HEIGHT_HALF, u, ((y-i)*powAZx50) + GFX_HEIGHT_HALF);
+                gfx_Line(p, q, u, v);
+            }
+
+            for (uint8_t i = 0; i <= length; i++) {
+
+                const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK+i-1];
+                const int24_t o = ((y-width)*powAZp1x50) + GFX_HEIGHT_HALF;
+
+                gfx_VertLine(u, t, v-t);
+                gfx_VertLine(((x-1)*powAZp1x50) + GFX_WIDTH_HALF, o, (y*powAZp1x50) + GFX_HEIGHT_HALF-o);
+            }
+        }
+        break;
+    case PANEL_BACK:
+        
+        if (true) {  // removing this causes bugs, idfk know why
+            const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
+
+            const int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
+            const int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
+
+            const int24_t w = ((x-1+width)*powAZx50) + GFX_WIDTH_HALF;
+            const int24_t v = ((y-1+length)*powAZx50) + GFX_HEIGHT_HALF;
+            uint8_t clip = CLIP;
+
+            if (w < 0 && u > GFX_LCD_WIDTH && v > GFX_LCD_HEIGHT && t < 0) {
+                clip = SKIP_RENDER;
+            } else if (w < GFX_LCD_WIDTH && u > 0 && t > 0 && v < GFX_LCD_HEIGHT) {
+                clip = NO_CLIP;
+            }
+
+            if (fill == FILLED) {
+                switch (clip) {
+                case CLIP:
+                    gfx_FillRectangle(u, t, w-u, v-t);
+                    break;
+                case NO_CLIP:
+                    gfx_FillRectangle_NoClip(u, t, w-u, v-t);
+                    break;
+                default:
+                    break;
                 }
-                break;
+                
+                gfx_SetColor(outline_color);
+            }
+            
+            switch (clip) {
             case CLIP:
                 for (uint8_t i = 0; i <= length; i++) {
-                    r = (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF;
-                    gfx_HorizLine(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r);
+                    gfx_HorizLine(u, ((y-1+i)*powAZx50) + GFX_HEIGHT_HALF, w-u);
                 }
-
                 for (uint8_t i = 0; i <= width; i++) {
-
-                    gfx_Line(
-                    ((x+i)*powAZp1x50) + GFX_WIDTH_HALF,
-                    (a) + GFX_HEIGHT_HALF,
-                    ((x+i)*powAZx50) + GFX_WIDTH_HALF,
-                    (b) + GFX_HEIGHT_HALF
-                    );
+                    gfx_VertLine(((x-1+i)*powAZx50) + GFX_WIDTH_HALF, t, v-t);
+                }
+                break;
+            case NO_CLIP:
+                for (uint8_t i = 0; i <= length; i++) {
+                    gfx_HorizLine_NoClip(u, ((y-1+i)*powAZx50) + GFX_HEIGHT_HALF, w-u);
+                }
+                for (uint8_t i = 0; i <= width; i++) {
+                    gfx_VertLine_NoClip(((x-1+i)*powAZx50) + GFX_WIDTH_HALF, t, v-t);
                 }
                 break;
             default:
                 break;
+                    
+            }
         }
-    } else {
-        gfx_Rectangle(50, 50, 20, 20);
+        break;
     }
 }
 
@@ -698,13 +849,14 @@ int main(void)
         gfx_SetTextXY(140,5);
         gfx_PrintInt(player_z, 2);
         gfx_SetTextXY(275,5);
-        gfx_PrintString("v0.2.5");
+        gfx_PrintString("v0.2.6");
         
         
         gfx_SetColor(GFX_BLUE);
-        // drawPlane(0-player_x, 0-player_y, 0-player_z, 5, 12, PANEL_BOTTOM, FILLED, GFX_GREEN);
-        // drawBox(0-player_x, 0-player_y, 0-player_z, WIREFRAME, NONE);
-        drawPanel(0-player_x, 0-player_y, 0-player_z, PANEL_LEFT, FILLED, GFX_RED);
+        drawPlane(0-player_x, 0-player_y, 0-player_z, 5, 12, PANEL_LEFT, FILLED, GFX_GREEN);
+        gfx_SetColor(GFX_PINK);
+        drawPlane(0-player_x, 0-player_y, 0-player_z, 2, 3, PANEL_BACK, FILLED, GFX_GREEN);
+        drawBox(0-player_x, 0-player_y, 0-player_z, WIREFRAME, NONE);
 
 
         gfx_SwapDraw();
