@@ -798,13 +798,15 @@ static void drawBasePlane(uint8_t y, uint8_t outline_color, uint8_t type) {
 
 // takes about 0.00025 seconds per item to sort
 static int8_t coordinates[][4] = {
-        {5, -2, 5, 0x20},
-        {5, -1, 5, 0x20},
-        {5, 0, 5, 0x20},
-        {4, -3, 5, 0x02},
-        {6, -3, 5, 0x02},
-        {5, -3, 4, 0x02},
-        {5, -3, 6, 0x02},
+        {-2, 0, 0, PANEL_LEFT},
+        {-2, -5, 0, PANEL_BOTTOM},
+        {3, 0, 0, PANEL_LEFT},
+        // {5, -1, 5, 0x20},
+        // {5, 0, 5, 0x20},
+        // {4, -3, 5, 0x02},
+        // {6, -3, 5, 0x02},
+        // {5, -3, 4, 0x02},
+        // {5, -3, 6, 0x02},
 };
 
 int main(void)
@@ -847,16 +849,16 @@ int main(void)
             player_x -= 1;
         } else if (kb_Data[7] & kb_Right) {
             player_x += 1;
-        } // else if (kb_Data[1] & kb_2nd) {
-        //     player_y += 1;
-        // } else if (kb_Data[2] & kb_Alpha) {
-        //     player_y -= 1;
-        // }
+        } else if (kb_Data[1] & kb_2nd) {
+            player_y += 1;
+        } else if (kb_Data[2] & kb_Alpha) {
+            player_y -= 1;
+        }
 
         
 
         // FPS counter
-        gfx_FillScreen(GFX_BLUE);
+        gfx_ZeroScreen();
         gfx_SetTextXY(5,5);
         gfx_PrintString("FPS:");
         gfx_SetTextXY(35,5);
@@ -877,13 +879,20 @@ int main(void)
         gfx_PrintString("v0.2.7");
         
         
-        gfx_SetColor(GFX_GREEN);
-        drawBasePlane(-player_y, GFX_BLACK, BASE_RENDER_DIST);
+        // gfx_SetColor(GFX_GREEN);
+        // drawBasePlane(-player_y, GFX_BLACK, BASE_RENDER_DIST);
 
-        for (uint8_t i = 0; i < LEN(coordinates); i++) {
-            gfx_SetColor(coordinates[i][3]);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, FILLED, GFX_BLACK);
-        }
+        // for (uint8_t i = 0; i < LEN(coordinates); i++) {
+        //     gfx_SetColor(coordinates[i][3]);
+        //     drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, FILLED, GFX_BLACK);
+        // }
+
+        gfx_SetColor(GFX_RED);
+        drawPlane(coordinates[0][0]-player_x, coordinates[0][1]-player_y, coordinates[0][2]-player_z, 10, 5, coordinates[0][3], FILLED, GFX_BLUE);
+        gfx_SetColor(GFX_RED);
+        drawPlane(coordinates[1][0]-player_x, coordinates[1][1]-player_y, coordinates[1][2]-player_z, 10, 5, coordinates[1][3], FILLED, GFX_BLUE);
+        gfx_SetColor(GFX_RED);
+        drawPlane(coordinates[2][0]-player_x, coordinates[2][1]-player_y, coordinates[2][2]-player_z, 10, 5, coordinates[2][3], FILLED, GFX_BLUE);
 
 
         gfx_SwapDraw();
