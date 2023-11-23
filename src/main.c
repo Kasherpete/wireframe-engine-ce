@@ -16,7 +16,6 @@
 
 
 #define NONE 0
-#define COORDINATE_LIST_LENGTH 4  // number of inside elements
 
 #define GFX_HEIGHT_HALF 120
 #define GFX_WIDTH_HALF  160
@@ -29,10 +28,6 @@
 #define VISIBLE_ONLY_WIREFRAME  1
 #define FILLED                  2
 
-#define BASE_FILL 0
-#define BASE_PART_FILL 1
-#define BASE_RENDER_DIST 2
-
 #define NO_CLIP      0
 #define CLIP         1
 #define SKIP_RENDER  2
@@ -43,7 +38,7 @@
 #define RENDER_DIST_Z_BACK           20   // back from the camera - used for calculations
 #define RENDER_DIST_Z_FRONT          30   // in front of the camera
 #define VISIBLE_RENDER_DIST_Z_BACK   3    // used solely for optimization
-#define VISIBLE_RENDER_DIST_Z_FRONT  15   //
+#define VISIBLE_RENDER_DIST_Z_FRONT  30   //
 
 #define GFX_BLACK   0x00
 #define GFX_RED     0xE0
@@ -64,7 +59,7 @@ const static uint8_t powAZx50list[] = {255, 255, 255, 255, 255, 255, 255, 255, 2
 
 
 static int8_t player_x = 0;
-static int8_t player_y = -2;
+static int8_t player_y = 0;
 static int8_t player_z = 0;
 
 
@@ -81,7 +76,7 @@ static int compareCoordinates(const void *a, const void *b) {
     return (abs(coord2[0] - player_x) + abs(coord2[1] - player_y)) - (abs(coord1[0] - player_x) + abs(coord1[1] - player_y));
 }
 
-static void sortCoordinateList(int8_t coordinates[][COORDINATE_LIST_LENGTH], size_t numCoordinates) {
+static void sortCoordinateList(int8_t coordinates[][3], size_t numCoordinates) {
 
     qsort(coordinates, numCoordinates, sizeof(coordinates[0]), compareCoordinates);
 }
@@ -108,8 +103,8 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
         const int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
 
         // tiny optimization. not sure if this has any benefit
-        const uint8_t wup1 = w-u+1;
-        const uint8_t rpp1 = r-p+1;
+        const uint8_t wup1 = w-u;
+        const uint8_t rpp1 = r-p;
 
         // 0 = on screen
         // 1 = partially on screen
@@ -520,7 +515,7 @@ static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position, uint8_t fi
             const int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
             
             if (fill == FILLED) {
-                gfx_FillRectangle(u, t, w-u+1, w-u+1);
+                gfx_FillRectangle(u, t, w-u, w-u);
                 gfx_SetColor(color);
             }
             gfx_Rectangle(u, t, w-u, w-u);
@@ -541,8 +536,8 @@ static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position, uint8_t fi
                 gfx_SetColor(color);
             }
 
-            gfx_HorizLine(p, o, r-p+1);
-            gfx_HorizLine(u, t, w-u+1);
+            gfx_HorizLine(p, o, r-p);
+            gfx_HorizLine(u, t, w-u);
             gfx_Line(r, o, w, t);
             gfx_Line(p, o, u, t);
 
@@ -562,8 +557,8 @@ static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position, uint8_t fi
                 gfx_SetColor(color);
             }
 
-            gfx_VertLine(u, t, v-t+1);
-            gfx_VertLine(p, o, q-o+1);
+            gfx_VertLine(u, t, v-t);
+            gfx_VertLine(p, o, q-o);
             gfx_Line(p, o, u, t);
             gfx_Line(p, q, u, v);
 
@@ -583,7 +578,7 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
         x -= 1;
         z -= 1;
         
-        if (((z + length) < VISIBLE_RENDER_DIST_Z_FRONT) && (((z + length) > -VISIBLE_RENDER_DIST_Z_BACK) && ((z) > -RENDER_DIST_Z_BACK))) {
+        if (((z + width) < VISIBLE_RENDER_DIST_Z_FRONT) && (((z + width) > -VISIBLE_RENDER_DIST_Z_BACK) && ((z) > -RENDER_DIST_Z_BACK))) {
             
             int24_t r;
             const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
@@ -628,7 +623,7 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
                 case NO_CLIP:
                     for (uint8_t i = 0; i <= length; i++) {
                         r = (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF;
-                        gfx_HorizLine_NoClip(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r+1);
+                        gfx_HorizLine_NoClip(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r);
                     }
 
                     for (uint8_t i = 0; i <= width; i++) {
@@ -644,7 +639,7 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
                 case CLIP:
                     for (uint8_t i = 0; i <= length; i++) {
                         r = (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF;
-                        gfx_HorizLine(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r+1);
+                        gfx_HorizLine(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r);
                     }
 
                     for (uint8_t i = 0; i <= width; i++) {
@@ -660,6 +655,8 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
                 default:
                     break;
             }
+        } else {
+            gfx_Rectangle(50, 50, 20, 20);
         }
         break;
     case PANEL_LEFT:
@@ -685,6 +682,7 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
                 clip = SKIP_RENDER;
             } else if (u > 0 && u < GFX_LCD_WIDTH && t > 0 && v < GFX_LCD_HEIGHT) {
                 clip = NO_CLIP;
+                gfx_Rectangle(20, 20, 20, 20);
             }
 
             if (fill == FILLED) {
@@ -777,36 +775,11 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
 }
 
 
-static void drawBasePlane(uint8_t y, uint8_t outline_color, uint8_t type) {
-
-    if (type == BASE_FILL || type == BASE_PART_FILL) {
-        gfx_FillRectangle_NoClip(0, GFX_HEIGHT_HALF, GFX_LCD_WIDTH, GFX_HEIGHT_HALF);
-    } else if (type == BASE_RENDER_DIST) {
-        drawPlane(-RENDER_DIST_X, y, -VISIBLE_RENDER_DIST_Z_BACK, VISIBLE_RENDER_DIST_Z_FRONT, RENDER_DIST_X*2, PANEL_BOTTOM, FILLED, outline_color);
-        return;
-    }
-
-    if (type == BASE_PART_FILL) {
-        drawPlane(-RENDER_DIST_X, y, -VISIBLE_RENDER_DIST_Z_BACK, VISIBLE_RENDER_DIST_Z_FRONT, RENDER_DIST_X*2, PANEL_BOTTOM, WIREFRAME, outline_color);
-        return;
-    } else {
-        // do entire fill
-    }
-
-}
-
-
 // takes about 0.00025 seconds per item to sort
-static int8_t coordinates[][4] = {
-        {-2, 0, 0, PANEL_LEFT},
-        {-2, -5, 0, PANEL_BOTTOM},
-        {3, 0, 0, PANEL_LEFT},
-        // {5, -1, 5, 0x20},
-        // {5, 0, 5, 0x20},
-        // {4, -3, 5, 0x02},
-        // {6, -3, 5, 0x02},
-        // {5, -3, 4, 0x02},
-        // {5, -3, 6, 0x02},
+static int8_t coordinates[][3] = {
+        {1, 2, 5},
+        {-1, 2, 5},
+        {-3, 2, 5},
 };
 
 int main(void)
@@ -876,23 +849,14 @@ int main(void)
         gfx_SetTextXY(140,5);
         gfx_PrintInt(player_z, 2);
         gfx_SetTextXY(275,5);
-        gfx_PrintString("v0.2.7");
+        gfx_PrintString("v0.2.6");
         
         
-        // gfx_SetColor(GFX_GREEN);
-        // drawBasePlane(-player_y, GFX_BLACK, BASE_RENDER_DIST);
-
-        // for (uint8_t i = 0; i < LEN(coordinates); i++) {
-        //     gfx_SetColor(coordinates[i][3]);
-        //     drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, FILLED, GFX_BLACK);
-        // }
-
-        gfx_SetColor(GFX_RED);
-        drawPlane(coordinates[0][0]-player_x, coordinates[0][1]-player_y, coordinates[0][2]-player_z, 10, 5, coordinates[0][3], FILLED, GFX_BLUE);
-        gfx_SetColor(GFX_RED);
-        drawPlane(coordinates[1][0]-player_x, coordinates[1][1]-player_y, coordinates[1][2]-player_z, 10, 5, coordinates[1][3], FILLED, GFX_BLUE);
-        gfx_SetColor(GFX_RED);
-        drawPlane(coordinates[2][0]-player_x, coordinates[2][1]-player_y, coordinates[2][2]-player_z, 10, 5, coordinates[2][3], FILLED, GFX_BLUE);
+        gfx_SetColor(GFX_BLUE);
+        drawPlane(0-player_x, 0-player_y, 0-player_z, 5, 12, PANEL_LEFT, FILLED, GFX_GREEN);
+        gfx_SetColor(GFX_PINK);
+        drawPlane(0-player_x, 0-player_y, 0-player_z, 2, 3, PANEL_BACK, FILLED, GFX_GREEN);
+        drawBox(0-player_x, 0-player_y, 0-player_z, WIREFRAME, NONE);
 
 
         gfx_SwapDraw();
