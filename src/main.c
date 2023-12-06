@@ -14,6 +14,7 @@
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
+#define TRAPEZOID_QUALITY 64
 
 #define NONE 0
 #define COORDINATE_LIST_LENGTH 4  // number of inside elements
@@ -344,11 +345,11 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
 static void drawTrapezoid(int x1, int x2, int x3, int x4, int y1, int y2) {
 
 
-    int n1 = (((x2-x1)*100/(y1-y2)));
-    int n2 = (((x3-x4)*100/(y1-y2)));
+    int n1 = (((x2-x1)*TRAPEZOID_QUALITY/(y1-y2)));
+    int n2 = (((x3-x4)*TRAPEZOID_QUALITY/(y1-y2)));
 
-    int j = x1 * 100;
-    int k = x4 * 100;
+    int j = x1 * TRAPEZOID_QUALITY;
+    int k = x4 * TRAPEZOID_QUALITY;
     int s = 0;
 
     if (y1 < y2) {
@@ -360,8 +361,8 @@ static void drawTrapezoid(int x1, int x2, int x3, int x4, int y1, int y2) {
             if (i < 0 || i > GFX_LCD_HEIGHT)
             continue;
 
-            s = j / 100;
-            gfx_HorizLine(s, i, k / 100-s);
+            s = j / TRAPEZOID_QUALITY;
+            gfx_HorizLine(s, i, k / TRAPEZOID_QUALITY-s);
         }
     } else {
         for (int i = y1; i > y2; i--) {
@@ -372,19 +373,19 @@ static void drawTrapezoid(int x1, int x2, int x3, int x4, int y1, int y2) {
             if (i < 0 || i > GFX_LCD_HEIGHT)
             continue;
 
-            s = j / 100;
-            gfx_HorizLine(s, i, k / 100-s);
+            s = j / TRAPEZOID_QUALITY;
+            gfx_HorizLine(s, i, k / TRAPEZOID_QUALITY-s);
         }
     }
 }
 
 static void drawTrapezoid_NoClip(int x1, int x2, int x3, int x4, int y1, int y2) {
 
-    int n1 = (((x2-x1)*100/(y1-y2)));
-    int n2 = (((x3-x4)*100/(y1-y2)));
+    int n1 = (((x2-x1)*TRAPEZOID_QUALITY/(y1-y2)));
+    int n2 = (((x3-x4)*TRAPEZOID_QUALITY/(y1-y2)));
 
-    int j = x1 * 100;
-    int k = x4 * 100;
+    int j = x1 * TRAPEZOID_QUALITY;
+    int k = x4 * TRAPEZOID_QUALITY;
     int s = 0;
 
     if (y1 < y2) {
@@ -396,8 +397,8 @@ static void drawTrapezoid_NoClip(int x1, int x2, int x3, int x4, int y1, int y2)
             if (i < 0 || i > GFX_LCD_HEIGHT)
             continue;
 
-            s = j / 100;
-            gfx_HorizLine_NoClip(s, i, k / 100-s);
+            s = j / TRAPEZOID_QUALITY;
+            gfx_HorizLine_NoClip(s, i, k / TRAPEZOID_QUALITY-s);
         }
     } else {
         for (int i = y1; i > y2; i--) {
@@ -408,19 +409,19 @@ static void drawTrapezoid_NoClip(int x1, int x2, int x3, int x4, int y1, int y2)
             if (i < 0 || i > GFX_LCD_HEIGHT)
             continue;
 
-            s = j / 100;
-            gfx_HorizLine_NoClip(s, i, k / 100-s);
+            s = j / TRAPEZOID_QUALITY;
+            gfx_HorizLine_NoClip(s, i, k / TRAPEZOID_QUALITY-s);
         }
     }
 }
 
 static void drawRotateTrapezoid_NoClip(int y1, int y2, int y3, int y4, int x2, int x1) {
 
-    int n1 = (((y2-y1)*100/(x1-x2)));
-    int n2 = (((y3-y4)*100/(x1-x2)));
+    int n1 = (((y2-y1)*TRAPEZOID_QUALITY/(x1-x2)));
+    int n2 = (((y3-y4)*TRAPEZOID_QUALITY/(x1-x2)));
 
-    int j = y1 * 100;
-    int k = y4 * 100;
+    int j = y1 * TRAPEZOID_QUALITY;
+    int k = y4 * TRAPEZOID_QUALITY;
     int s = 0;
 
     if (x1 < x2) {
@@ -432,8 +433,8 @@ static void drawRotateTrapezoid_NoClip(int y1, int y2, int y3, int y4, int x2, i
             if (i < 0)
             continue;
 
-            s = j / 100;
-            gfx_VertLine_NoClip(i, s, k / 100-s);
+            s = j / TRAPEZOID_QUALITY;
+            gfx_VertLine_NoClip(i, s, k / TRAPEZOID_QUALITY-s);
         }
     } else {
         for (int i = x1; i > x2; i--) {
@@ -444,19 +445,19 @@ static void drawRotateTrapezoid_NoClip(int y1, int y2, int y3, int y4, int x2, i
             if (i > GFX_LCD_WIDTH)
             continue;
 
-            s = j / 100;
-            gfx_VertLine_NoClip(i, s, k / 100-s);
+            s = j / TRAPEZOID_QUALITY;
+            gfx_VertLine_NoClip(i, s, k / TRAPEZOID_QUALITY-s);
         }
     }
 }
 
 static void drawRotateTrapezoid(int y1, int y2, int y3, int y4, int x2, int x1) {
 
-    int n1 = (((y2-y1)*100/(x1-x2)));
-    int n2 = (((y3-y4)*100/(x1-x2)));
+    int n1 = (((y2-y1)*TRAPEZOID_QUALITY/(x1-x2)));
+    int n2 = (((y3-y4)*TRAPEZOID_QUALITY/(x1-x2)));
 
-    int j = y1 * 100;
-    int k = y4 * 100;
+    int j = y1 * TRAPEZOID_QUALITY;
+    int k = y4 * TRAPEZOID_QUALITY;
     int s = 0;
 
     if (x1 < x2) {
@@ -469,8 +470,8 @@ static void drawRotateTrapezoid(int y1, int y2, int y3, int y4, int x2, int x1) 
             continue;
 
             
-            s = j / 100;
-            gfx_VertLine(i, s, k / 100-s);
+            s = j / TRAPEZOID_QUALITY;
+            gfx_VertLine(i, s, k / TRAPEZOID_QUALITY-s);
         }
     } else {
         for (int i = x1; i > x2; i--) {
@@ -482,8 +483,8 @@ static void drawRotateTrapezoid(int y1, int y2, int y3, int y4, int x2, int x1) 
             continue;
 
             
-            s = j / 100;
-            gfx_VertLine(i, s, k / 100-s);
+            s = j / TRAPEZOID_QUALITY;
+            gfx_VertLine(i, s, k / TRAPEZOID_QUALITY-s);
         }
     }
 }
@@ -777,7 +778,7 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
 }
 
 
-static void drawBasePlane(uint8_t y, uint8_t outline_color, uint8_t type) {
+static void drawBasePlane(int8_t y, uint8_t outline_color, uint8_t type) {
 
     if (type == BASE_FILL || type == BASE_PART_FILL) {
         gfx_FillRectangle_NoClip(0, GFX_HEIGHT_HALF, GFX_LCD_WIDTH, GFX_HEIGHT_HALF);
