@@ -37,6 +37,8 @@ In `main.c`, you will find some `#define`'s at the top. Just configure them to y
  - [x] *Unplanned*: Implement a lookup table for both powAZx50 variables - which are calculated every voxel
 ### Changelog
 
+***v0.2.7*** - Added DrawBasePlane, multiple bug fixes, small optimizations, and code changes
+
 ***v0.2.6*** - Fully implement planes, optimize existing algorithms, updated trapezoid routine, other small changes
 
 ***v0.2.5*** - Fix clipping algorithm, improve `powAZx50.py` script, fix render algorithm, add coordinate view, add basic `drawPlane()` function - only able to lay flat.
