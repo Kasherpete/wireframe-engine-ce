@@ -6,6 +6,34 @@
 #include <time.h>
 #include <stdint.h>
 
+#include <sys/lcd.h>
+#include <string.h>
+
+// #include "../gfx/gfx.h"
+// #include "../gfx/mypalette.h"
+
+unsigned char mypalette[32] =
+{
+    0x00, 0x00, /*   0: rgb(  0,   0,   0) */
+    0xaa, 0x90, /*   1: rgb( 33,  45,  82) */
+    0x8a, 0xbc, /*   2: rgb(123,  36,  82) */
+    0x0a, 0x82, /*   3: rgb(  0, 134,  82) */
+    0x47, 0x55, /*   4: rgb(173,  81,  58) */
+    0x4a, 0xb1, /*   5: rgb( 99,  85,  82) */
+    0x18, 0x63, /*   6: rgb(197, 194, 197) */
+    0xdc, 0x7f, /*   7: rgb(255, 243, 230) */
+    0x09, 0x7c, /*   8: rgb(255,   0,  74) */
+    0x80, 0x7e, /*   9: rgb(255, 162,   0) */
+    0xa5, 0x7f, /*  10: rgb(255, 235,  41) */
+    0x87, 0x03, /*  11: rgb(  0, 227,  58) */
+    0xbf, 0x96, /*  12: rgb( 41, 174, 255) */
+    0xd3, 0xc1, /*  13: rgb(132, 117, 156) */
+    0xd4, 0xfd, /*  14: rgb(255, 117, 165) */
+    0x35, 0x7f, /*  15: rgb(255, 202, 173) */
+};
+
+#define BASE_X ((LCD_WIDTH - 128 * 2) / 4)
+
 #include <debug.h>
 
 
@@ -19,8 +47,12 @@
 #define NONE 0
 #define COORDINATE_LIST_LENGTH 4  // number of inside elements
 
-#define GFX_HEIGHT_HALF 120
-#define GFX_WIDTH_HALF  160
+#define GFX_HEIGHT_HALF 60
+#define GFX_WIDTH_HALF  80
+#define GFX_LCD_WIDTH 160
+#define GFX_LCD_HEIGHT 120
+#define SCREEN_OFFSET BASE_X
+#define VIEWPORT_LENGTH 128
 
 #define PANEL_BOTTOM  0
 #define PANEL_LEFT    1
@@ -46,15 +78,20 @@
 #define VISIBLE_RENDER_DIST_Z_BACK   3    // used solely for optimization
 #define VISIBLE_RENDER_DIST_Z_FRONT  15   //
 
-#define GFX_BLACK   0x00
-#define GFX_RED     0xE0
-#define GFX_ORANGE  0xE3
-#define GFX_GREEN   0x03
-#define GFX_BLUE    0x10
-#define GFX_PURPLE  0x50
-#define GFX_YELLOW  0xE7
-#define GFX_PINK    0xF0
-#define GFX_WHITE   0xFF
+#define BASE_X ((LCD_WIDTH - 128 * 2) / 4)
+static uint8_t pal_map[16] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
+
+
+// FOR TESTING ONLY...NOT ACCURATE
+#define GFX_BLACK   pal_map[0]
+#define GFX_RED     pal_map[1]
+#define GFX_ORANGE  pal_map[2]
+#define GFX_GREEN   pal_map[3]
+#define GFX_BLUE    0xcc
+#define GFX_PURPLE  pal_map[5]
+#define GFX_YELLOW  pal_map[6]
+#define GFX_PINK    pal_map[7]
+#define GFX_WHITE   pal_map[8]
 
 // simple rectangular prism. cone-shape would be best in the future
 #define RENDER_DISTANCE_ALGORITHM (z > -VISIBLE_RENDER_DIST_Z_BACK) && (z < VISIBLE_RENDER_DIST_Z_FRONT) && (x < RENDER_DIST_X) && (x > -RENDER_DIST_X) && (y < RENDER_DIST_Y) && (y > -RENDER_DIST_Y)
@@ -118,9 +155,9 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
         uint8_t clip = CLIP;
 
         // determines route of action for clipping
-        if ((r < 320) && (p >= 0) && (o >= 0) && (q < 240)) {
+        if ((r < SCREEN_OFFSET+VIEWPORT_LENGTH) && (p >= SCREEN_OFFSET) && (o >= 0) && (q < GFX_LCD_HEIGHT)) {
             clip = NO_CLIP;
-        } else if ((u > 320) || (w < 0) || (t > 240) || (v < 0)) {
+        } else if ((u > SCREEN_OFFSET+VIEWPORT_LENGTH) || (w < SCREEN_OFFSET) || (t > GFX_LCD_HEIGHT) || (v < 0)) {
             clip = SKIP_RENDER;
         }
 
@@ -155,19 +192,19 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
             switch (clip) {
 
             case NO_CLIP:  // if fully on screen
-                if (u < 160 && v > 120) {
+                if (u < GFX_WIDTH_HALF && v > GFX_HEIGHT_HALF) {
                     gfx_Line_NoClip(r, q, w, v);
                     gfx_Line_NoClip(r, o, w, t);
                     gfx_Line_NoClip(p, o, u, t);
                     gfx_VertLine_NoClip(w, t, wup1);
                     gfx_HorizLine_NoClip(u, t, wup1);
-                } else if (u >= 160 && v > 120) {
+                } else if (u >= GFX_WIDTH_HALF && v > GFX_HEIGHT_HALF) {
                     gfx_Line_NoClip(r, o, w, t);
                     gfx_Line_NoClip(p, o, u, t);
                     gfx_Line_NoClip(p, q, u, v);
                     gfx_VertLine_NoClip(u, t, wup1);
                     gfx_HorizLine_NoClip(u, t, wup1);
-                } else if (u >= 160 && v <= 120) {
+                } else if (u >= GFX_WIDTH_HALF && v <= GFX_HEIGHT_HALF) {
                     gfx_Line_NoClip(r, q, w, v);
                     gfx_Line_NoClip(p, q, u, v);
                     gfx_Line_NoClip(p, o, u, t);
@@ -187,19 +224,19 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
                 break;
 
             case CLIP:  // if partly off screen
-                if (u < 160 && v > 120) {  // bottom left
+                if (u < GFX_WIDTH_HALF && v > GFX_HEIGHT_HALF) {  // bottom left
                     gfx_Line(r, q, w, v);
                     gfx_Line(r, o, w, t);
                     gfx_Line(p, o, u, t);
                     gfx_VertLine(w, t, wup1);
                     gfx_HorizLine(u, t, wup1);
-                } else if (u >= 160 && v > 120) {  // bottom right
+                } else if (u >= GFX_WIDTH_HALF && v > GFX_HEIGHT_HALF) {  // bottom right
                     gfx_Line(r, o, w, t);
                     gfx_Line(p, o, u, t);
                     gfx_Line(p, q, u, v);
                     gfx_VertLine(u, t, wup1);
                     gfx_HorizLine(u, t, wup1);
-                } else if (u >= 160 && v <= 120) {  // top right
+                } else if (u >= GFX_WIDTH_HALF && v <= GFX_HEIGHT_HALF) {  // top right
                     gfx_Line(r, q, w, v);
                     gfx_Line(p, q, u, v);
                     gfx_Line(p, o, u, t);
@@ -229,7 +266,7 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
             case 0:  // if fully on screen
 
                 // fill area
-                if (u < 160 && v > 120) {
+                if (u < GFX_WIDTH_HALF && v > GFX_HEIGHT_HALF) {
                     gfx_FillTriangle_NoClip(w, v, w, t, u, t);
                     gfx_FillTriangle_NoClip(p, q, r, q, p, o);
                     gfx_FillTriangle_NoClip(u, t, w, v, p, o);
@@ -240,7 +277,7 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
                     gfx_Line_NoClip(p, o, u, t);
                     gfx_VertLine_NoClip(w, t, wup1);
                     gfx_HorizLine_NoClip(u, t, wup1);
-                } else if (u >= 160 && v > 120) {
+                } else if (u >= GFX_WIDTH_HALF && v > GFX_HEIGHT_HALF) {
                     gfx_FillTriangle_NoClip(w, t, u, t, u, v);
                     gfx_FillTriangle_NoClip(p, q, r, o, r, q);
                     gfx_FillTriangle_NoClip(u, v, w, t, r, o);
@@ -251,7 +288,7 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
                     gfx_Line_NoClip(p, q, u, v);
                     gfx_VertLine_NoClip(u, t, wup1);
                     gfx_HorizLine_NoClip(u, t, wup1);
-                } else if (u >= 160 && v <= 120) {
+                } else if (u >= GFX_WIDTH_HALF && v <= GFX_HEIGHT_HALF) {
                     gfx_FillTriangle_NoClip(u, t, u, v, w, v);
                     gfx_FillTriangle_NoClip(r, q, r, o, p, o);
                     gfx_FillTriangle_NoClip(r, q, p, o, w, v);
@@ -283,7 +320,7 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
             case 1:  // if partly off screen
 
                 // fill area
-                if (u < 160 && v > 120) {  // bottom left
+                if (u < GFX_WIDTH_HALF && v > GFX_HEIGHT_HALF) {  // bottom left
                     gfx_FillTriangle(w, v, w, t, u, t);
                     gfx_FillTriangle(p, q, r, q, p, o);
                     gfx_FillTriangle(u, t, w, v, p, o);
@@ -294,7 +331,7 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
                     gfx_Line(p, o, u, t);
                     gfx_VertLine(w, t, wup1);
                     gfx_HorizLine(u, t, wup1);
-                } else if (u >= 160 && v > 120) {  // bottom right
+                } else if (u >= GFX_WIDTH_HALF && v > GFX_HEIGHT_HALF) {  // bottom right
                     gfx_FillTriangle(w, t, u, t, u, v);
                     gfx_FillTriangle(p, q, r, o, r, q);
                     gfx_FillTriangle(u, v, w, t, r, o);
@@ -305,7 +342,7 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
                     gfx_Line(p, q, u, v);
                     gfx_VertLine(u, t, wup1);
                     gfx_HorizLine(u, t, wup1);
-                } else if (u >= 160 && v <= 120) {  // top right
+                } else if (u >= GFX_WIDTH_HALF && v <= GFX_HEIGHT_HALF) {  // top right
                     gfx_FillTriangle(u, t, u, v, w, v);
                     gfx_FillTriangle(r, q, r, o, p, o);
                     gfx_FillTriangle(r, q, p, o, w, v);
@@ -442,7 +479,7 @@ static void drawRotateTrapezoid_NoClip(int y1, int y2, int y3, int y4, int x2, i
             j += n1;
             k += n2;
 
-            if (i > GFX_LCD_WIDTH)
+            if (i > VIEWPORT_LENGTH)
             continue;
 
             s = j / TRAPEZOID_QUALITY;
@@ -479,7 +516,7 @@ static void drawRotateTrapezoid(int y1, int y2, int y3, int y4, int x2, int x1) 
             j += n1;
             k += n2;
 
-            if (i > GFX_LCD_WIDTH)
+            if (i > VIEWPORT_LENGTH)
             continue;
 
             
@@ -595,9 +632,9 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
             uint8_t clip = CLIP;
 
 
-            if ((a + GFX_HEIGHT_HALF <= 0) || (a + GFX_HEIGHT_HALF >= 240) || (((x*powAZp1x50) + GFX_WIDTH_HALF >= 320) || (((x+width)*powAZp1x50) + GFX_WIDTH_HALF <= 0))) {
+            if ((a + GFX_HEIGHT_HALF <= 0) || (a + GFX_HEIGHT_HALF >= GFX_LCD_HEIGHT) || (((x*powAZp1x50) + GFX_WIDTH_HALF >= SCREEN_OFFSET+VIEWPORT_LENGTH) || (((x+width)*powAZp1x50) + GFX_WIDTH_HALF <= SCREEN_OFFSET))) {
                 clip = SKIP_RENDER;
-            } else if ((b + GFX_HEIGHT_HALF >= 0) && (b + GFX_HEIGHT_HALF < 240) && (((x*powAZx50)) + GFX_WIDTH_HALF >= 0) && ((((x+width)*powAZx50)) + GFX_WIDTH_HALF < 320)) {
+            } else if ((b + GFX_HEIGHT_HALF >= 0) && (b + GFX_HEIGHT_HALF < GFX_LCD_HEIGHT) && (((x*powAZx50)) + GFX_WIDTH_HALF >= SCREEN_OFFSET) && ((((x+width)*powAZx50)) + GFX_WIDTH_HALF < SCREEN_OFFSET+VIEWPORT_LENGTH)) {
                 clip = NO_CLIP;
             }
 
@@ -682,9 +719,9 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
             uint8_t clip = CLIP;
 
 
-            if (p > GFX_LCD_WIDTH && p < 0 && q < 0 && o > GFX_LCD_HEIGHT) {
+            if (p > SCREEN_OFFSET+VIEWPORT_LENGTH && p < SCREEN_OFFSET && q < 0 && o > GFX_LCD_HEIGHT) {
                 clip = SKIP_RENDER;
-            } else if (u > 0 && u < GFX_LCD_WIDTH && t > 0 && v < GFX_LCD_HEIGHT) {
+            } else if (u > SCREEN_OFFSET && u < SCREEN_OFFSET+VIEWPORT_LENGTH && t > 0 && v < GFX_LCD_HEIGHT) {
                 clip = NO_CLIP;
             }
 
@@ -730,9 +767,9 @@ static void drawPlane(int8_t x, int8_t y, int8_t z, uint8_t length, uint8_t widt
             const int24_t v = ((y-1+length)*powAZx50) + GFX_HEIGHT_HALF;
             uint8_t clip = CLIP;
 
-            if (w < 0 && u > GFX_LCD_WIDTH && v > GFX_LCD_HEIGHT && t < 0) {
+            if (w < SCREEN_OFFSET && u > SCREEN_OFFSET+VIEWPORT_LENGTH && v > GFX_LCD_HEIGHT && t < 0) {
                 clip = SKIP_RENDER;
-            } else if (w < GFX_LCD_WIDTH && u > 0 && t > 0 && v < GFX_LCD_HEIGHT) {
+            } else if (w < SCREEN_OFFSET+VIEWPORT_LENGTH && SCREEN_OFFSET > 0 && t > 0 && v < GFX_LCD_HEIGHT) {
                 clip = NO_CLIP;
             }
 
@@ -799,13 +836,13 @@ static void drawBasePlane(int8_t y, uint8_t outline_color, uint8_t type) {
 
 // takes about 0.00025 seconds per item to sort
 static int8_t coordinates[][4] = {
-        {5, -2, 5, 0x20},
-        {5, -1, 5, 0x20},
-        {5, 0, 5, 0x20},
-        {4, -3, 5, 0x02},
-        {6, -3, 5, 0x02},
-        {5, -3, 4, 0x02},
-        {5, -3, 6, 0x02},
+        {5, -2, 5, 0x44},
+        {5, -1, 5, 0x44},
+        {5, 0, 5, 0x44},
+        {4, -3, 5, 0x33},
+        {6, -3, 5, 0x33},
+        {5, -3, 4, 0x33},
+        {5, -3, 6, 0x33},
 };
 
 int main(void)
@@ -817,7 +854,23 @@ int main(void)
     }
 
     gfx_Begin();
-    gfx_ZeroScreen();
+    
+    gfx_SetPalette(mypalette, sizeof mypalette, 0);
+    gfx_SetClipRegion(BASE_X, 0, BASE_X + 128, GFX_LCD_HEIGHT);
+    lcd_Control = 0x13925; // 4 bpp mode
+
+
+    // gfx_ZeroScreen();
+    for (int i = 0; i < 2; i++) {
+        gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+        gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+        // de-interlace entire screen
+        for(uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
+            memcpy(&gfx_vbuffer[y][LCD_WIDTH / 2], &gfx_vbuffer[y][0], LCD_WIDTH / 2);
+        }
+
+        gfx_SwapDraw();
+    }
     sortCoordinateList(coordinates, LEN(coordinates));
 
     gfx_SetColor(GFX_RED);
@@ -857,25 +910,26 @@ int main(void)
         
 
         // FPS counter
-        gfx_FillScreen(GFX_BLUE);
-        gfx_SetTextXY(5,5);
-        gfx_PrintString("FPS:");
-        gfx_SetTextXY(35,5);
-        gfx_PrintUInt(fps, 2);
-        gfx_SetTextXY(55,5);
-        gfx_PrintString("X:");
-        gfx_SetTextXY(70,5);
-        gfx_PrintInt(player_x, 2);
-        gfx_SetTextXY(90,5);
-        gfx_PrintString("Y:");
-        gfx_SetTextXY(105,5);
-        gfx_PrintInt(player_y, 2);
-        gfx_SetTextXY(125,5);
-        gfx_PrintString("Z:");
-        gfx_SetTextXY(140,5);
-        gfx_PrintInt(player_z, 2);
-        gfx_SetTextXY(275,5);
-        gfx_PrintString("v0.2.7");
+        gfx_SetColor(GFX_BLUE);
+        gfx_FillRectangle_NoClip(SCREEN_OFFSET, 0, VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
+        // gfx_SetTextXY(5,5);
+        // gfx_PrintString("FPS:");
+        // gfx_SetTextXY(35,5);
+        // gfx_PrintUInt(fps, 2);
+        // gfx_SetTextXY(55,5);
+        // gfx_PrintString("X:");
+        // gfx_SetTextXY(70,5);
+        // gfx_PrintInt(player_x, 2);
+        // gfx_SetTextXY(90,5);
+        // gfx_PrintString("Y:");
+        // gfx_SetTextXY(105,5);
+        // gfx_PrintInt(player_y, 2);
+        // gfx_SetTextXY(125,5);
+        // gfx_PrintString("Z:");
+        // gfx_SetTextXY(140,5);
+        // gfx_PrintInt(player_z, 2);
+        // gfx_SetTextXY(275,5);
+        // gfx_PrintString("v0.2.7");
         
         
         gfx_SetColor(GFX_GREEN);
@@ -884,6 +938,24 @@ int main(void)
         for (uint8_t i = 0; i < LEN(coordinates); i++) {
             gfx_SetColor(coordinates[i][3]);
             drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, FILLED, GFX_BLACK);
+        }
+
+
+        
+        gfx_SetColor(0x00);
+
+        // // outside viewport
+        // gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+        // gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+
+        // // de-interlace entire screen
+        // for(uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
+        //     memcpy(&gfx_vbuffer[y][LCD_WIDTH / 2], &gfx_vbuffer[y][0], LCD_WIDTH / 2);
+        // }
+
+        // de-interlace viewport
+        for(uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
+            memcpy(&gfx_vbuffer[y][LCD_WIDTH / 2 + BASE_X], &gfx_vbuffer[y][BASE_X], LCD_WIDTH / 2 - BASE_X * 2);
         }
 
 
