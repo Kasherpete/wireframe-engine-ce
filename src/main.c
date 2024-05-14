@@ -5,37 +5,21 @@
 #include <math.h>
 #include <time.h>
 #include <stdint.h>
+#include <debug.h>
+#include <fontlibc.h>
 
 #include <sys/lcd.h>
 #include <string.h>
 
-// #include "../gfx/gfx.h"
-// #include "../gfx/mypalette.h"
 
-unsigned char mypalette[32] =
-{
-    0x00, 0x00, /*   0: rgb(  0,   0,   0) */
-    0xaa, 0x90, /*   1: rgb( 33,  45,  82) */
-    0x8a, 0xbc, /*   2: rgb(123,  36,  82) */
-    0x0a, 0x82, /*   3: rgb(  0, 134,  82) */
-    0x47, 0x55, /*   4: rgb(173,  81,  58) */
-    0x4a, 0xb1, /*   5: rgb( 99,  85,  82) */
-    0x18, 0x63, /*   6: rgb(197, 194, 197) */
-    0xdc, 0x7f, /*   7: rgb(255, 243, 230) */
-    0x09, 0x7c, /*   8: rgb(255,   0,  74) */
-    0x80, 0x7e, /*   9: rgb(255, 162,   0) */
-    0xa5, 0x7f, /*  10: rgb(255, 235,  41) */
-    0x87, 0x03, /*  11: rgb(  0, 227,  58) */
-    0xbf, 0x96, /*  12: rgb( 41, 174, 255) */
-    0xd3, 0xc1, /*  13: rgb(132, 117, 156) */
-    0xd4, 0xfd, /*  14: rgb(255, 117, 165) */
-    0x35, 0x7f, /*  15: rgb(255, 202, 173) */
-};
-
-#define BASE_X ((LCD_WIDTH - 128 * 2) / 4)
-
-#include <debug.h>
-
+#define SCREEN_OFFSET ((LCD_WIDTH - 128 * 2) / 4)  // screen x offset
+#define draw_buffer_ctrl lcd_LpBase
+#define screen_buffer_ctrl lcd_UpBase
+#define gfx_vram (**(uint8_t(**)[240][320])0xD40000)  // gfx_vram define override
+#define DBL_BUF1 0xD49600
+#define DBL_BUF2 0xD5C200
+#define BUFFER_1 0xD40000
+#define BUFFER_2 0xd52c00
 
 #define FOV 0.8
 #define LEN(arr) ((int) (sizeof (arr) / sizeof (arr)[0]))
@@ -51,7 +35,6 @@ unsigned char mypalette[32] =
 #define GFX_WIDTH_HALF  80
 #define GFX_LCD_WIDTH 160
 #define GFX_LCD_HEIGHT 120
-#define SCREEN_OFFSET BASE_X
 #define VIEWPORT_LENGTH 128
 
 #define PANEL_BOTTOM  0
@@ -78,20 +61,16 @@ unsigned char mypalette[32] =
 #define VISIBLE_RENDER_DIST_Z_BACK   3    // used solely for optimization
 #define VISIBLE_RENDER_DIST_Z_FRONT  15   //
 
-#define BASE_X ((LCD_WIDTH - 128 * 2) / 4)
-static uint8_t pal_map[16] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
-
-
 // FOR TESTING ONLY...NOT ACCURATE
-#define GFX_BLACK   pal_map[0]
-#define GFX_RED     pal_map[1]
-#define GFX_ORANGE  pal_map[2]
-#define GFX_GREEN   pal_map[3]
+#define GFX_BLACK   0x00
+#define GFX_RED     0x11
+#define GFX_ORANGE  0x22
+#define GFX_GREEN   0x33
 #define GFX_BLUE    0xcc
-#define GFX_PURPLE  pal_map[5]
-#define GFX_YELLOW  pal_map[6]
-#define GFX_PINK    pal_map[7]
-#define GFX_WHITE   pal_map[8]
+#define GFX_PURPLE  0x55
+#define GFX_YELLOW  0x66
+#define GFX_PINK    0x77
+#define GFX_WHITE   0x88
 
 // simple rectangular prism. cone-shape would be best in the future
 #define RENDER_DISTANCE_ALGORITHM (z > -VISIBLE_RENDER_DIST_Z_BACK) && (z < VISIBLE_RENDER_DIST_Z_FRONT) && (x < RENDER_DIST_X) && (x > -RENDER_DIST_X) && (y < RENDER_DIST_Y) && (y > -RENDER_DIST_Y)
@@ -100,10 +79,82 @@ static uint8_t pal_map[16] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x
 // auto-generated, do not tamper
 const static uint8_t powAZx50list[] = {255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 238, 191, 153, 122, 98, 78, 62, 50, 40, 32, 26, 20, 16, 13, 10, 8, 7, 5, 4, 3, 3, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
+// font data
+static uint8_t my_font_data[] = {
+    #include "../font/myfont.inc"
+};
+
+// palette data
+unsigned char mypalette[32] =
+{
+    0x00, 0x00, /*   0: rgb(  0,   0,   0) */
+    0xaa, 0x90, /*   1: rgb( 33,  45,  82) */
+    0x8a, 0xbc, /*   2: rgb(123,  36,  82) */
+    0x0a, 0x82, /*   3: rgb(  0, 134,  82) */
+    0x47, 0x55, /*   4: rgb(173,  81,  58) */
+    0x4a, 0xb1, /*   5: rgb( 99,  85,  82) */
+    0x18, 0x63, /*   6: rgb(197, 194, 197) */
+    0xdc, 0x7f, /*   7: rgb(255, 243, 230) */
+    0x09, 0x7c, /*   8: rgb(255,   0,  74) */
+    0x80, 0x7e, /*   9: rgb(255, 162,   0) */
+    0xa5, 0x7f, /*  10: rgb(255, 235,  41) */
+    0x87, 0x03, /*  11: rgb(  0, 227,  58) */
+    0xbf, 0x96, /*  12: rgb( 41, 174, 255) */
+    0xd3, 0xc1, /*  13: rgb(132, 117, 156) */
+    0xd4, 0xfd, /*  14: rgb(255, 117, 165) */
+    0x35, 0x7f, /*  15: rgb(255, 202, 173) */
+};
+
+// takes about 0.00025 seconds per item to sort
+static int8_t coordinates[][4] = {
+        {5, -2, 5, 0x44},
+        {5, -1, 5, 0x44},
+        {5, 0, 5, 0x44},
+        {4, -3, 5, 0x33},
+        {6, -3, 5, 0x33},
+        {5, -3, 4, 0x33},
+        {5, -3, 6, 0x33},
+};
 
 static int8_t player_x = 0;
 static int8_t player_y = -2;
 static int8_t player_z = 0;
+
+
+void deInterlaceFullBuffer(uint24_t buffer) {
+    for(uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
+        memcpy(&gfx_vbuffer[y][LCD_WIDTH / 2], &gfx_vbuffer[y][0], LCD_WIDTH / 2);}
+}
+
+
+void deInterlaceViewportBuffer(uint24_t buffer) {
+    for(uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
+        memcpy(&gfx_vbuffer[y][LCD_WIDTH / 2 + SCREEN_OFFSET], &gfx_vbuffer[y][SCREEN_OFFSET], LCD_WIDTH / 2 - SCREEN_OFFSET * 2);}
+}
+
+
+void setDrawBuffer(uint24_t buffer) {
+    draw_buffer_ctrl = buffer;
+}
+
+
+void setScreenBuffer(uint24_t buffer) {
+    screen_buffer_ctrl = buffer;
+}
+
+
+void swapBuffer() {
+
+    // swap roles of the buffers
+    if (draw_buffer_ctrl == BUFFER_1) {
+        setDrawBuffer(BUFFER_2);
+        setScreenBuffer(BUFFER_1);
+    } else {
+        setDrawBuffer(BUFFER_1);
+        setScreenBuffer(BUFFER_2);
+    }
+
+}
 
 
 static int compareCoordinates(const void *a, const void *b) {
@@ -119,10 +170,12 @@ static int compareCoordinates(const void *a, const void *b) {
     return (abs(coord2[0] - player_x) + abs(coord2[1] - player_y)) - (abs(coord1[0] - player_x) + abs(coord1[1] - player_y));
 }
 
+
 static void sortCoordinateList(int8_t coordinates[][COORDINATE_LIST_LENGTH], size_t numCoordinates) {
 
     qsort(coordinates, numCoordinates, sizeof(coordinates[0]), compareCoordinates);
 }
+
 
 static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) {
 
@@ -379,6 +432,7 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
     }
 }
 
+
 static void drawTrapezoid(int x1, int x2, int x3, int x4, int y1, int y2) {
 
 
@@ -416,6 +470,7 @@ static void drawTrapezoid(int x1, int x2, int x3, int x4, int y1, int y2) {
     }
 }
 
+
 static void drawTrapezoid_NoClip(int x1, int x2, int x3, int x4, int y1, int y2) {
 
     int n1 = (((x2-x1)*TRAPEZOID_QUALITY/(y1-y2)));
@@ -452,6 +507,7 @@ static void drawTrapezoid_NoClip(int x1, int x2, int x3, int x4, int y1, int y2)
     }
 }
 
+
 static void drawRotateTrapezoid_NoClip(int y1, int y2, int y3, int y4, int x2, int x1) {
 
     int n1 = (((y2-y1)*TRAPEZOID_QUALITY/(x1-x2)));
@@ -487,6 +543,7 @@ static void drawRotateTrapezoid_NoClip(int y1, int y2, int y3, int y4, int x2, i
         }
     }
 }
+
 
 static void drawRotateTrapezoid(int y1, int y2, int y3, int y4, int x2, int x1) {
 
@@ -834,61 +891,202 @@ static void drawBasePlane(int8_t y, uint8_t outline_color, uint8_t type) {
 }
 
 
-// takes about 0.00025 seconds per item to sort
-static int8_t coordinates[][4] = {
-        {5, -2, 5, 0x44},
-        {5, -1, 5, 0x44},
-        {5, 0, 5, 0x44},
-        {4, -3, 5, 0x33},
-        {6, -3, 5, 0x33},
-        {5, -3, 4, 0x33},
-        {5, -3, 6, 0x33},
-};
+void preRenderScreen() {
+    
+    uint24_t current_buffer = draw_buffer_ctrl;
+    setDrawBuffer(DBL_BUF1);
+
+    // sky
+    gfx_SetColor(GFX_BLUE);
+    gfx_FillRectangle_NoClip(SCREEN_OFFSET, 0, VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
+    
+    gfx_SetColor(GFX_GREEN);
+
+    int8_t x = -RENDER_DIST_X-1;
+    int8_t y=-player_y;
+    int8_t z=-VISIBLE_RENDER_DIST_Z_BACK-1;
+    uint8_t length=VISIBLE_RENDER_DIST_Z_FRONT;
+    uint8_t width=RENDER_DIST_X*2;
+
+    
+    int24_t r;
+    const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
+    const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK+length];
+    const int24_t a = (y)*powAZp1x50;
+    const int24_t b = (y)*powAZx50;
+   
+
+    r = a + GFX_HEIGHT_HALF;
+    const int24_t w = (x+width)*powAZp1x50 + GFX_WIDTH_HALF;
+    const int24_t v = x*powAZx50 + GFX_WIDTH_HALF;
+    const int24_t u = b + GFX_HEIGHT_HALF;
+
+    int x1 = v;
+    int x2=(x*powAZp1x50) + GFX_WIDTH_HALF;
+    int x3=w;
+    int x4=((x+width)*powAZx50) + GFX_WIDTH_HALF;
+    int y1=u;
+    int y2=r;
+
+
+    int n1 = (((x2-x1)*TRAPEZOID_QUALITY/(y1-y2)));
+    int n2 = (((x3-x4)*TRAPEZOID_QUALITY/(y1-y2)));
+
+    int j = x1 * TRAPEZOID_QUALITY;
+    int k = x4 * TRAPEZOID_QUALITY;
+    int s = 0;
+
+    if (y1 < y2) {
+        for (int i = y1; i < y2; i++) {
+            
+            j -= n1;
+            k -= n2;
+            
+            if (i < 0 || i > GFX_LCD_HEIGHT)
+            continue;
+
+            s = j / TRAPEZOID_QUALITY;
+            gfx_HorizLine(s, i, k / TRAPEZOID_QUALITY-s);
+        }
+    } else {
+        for (int i = y1; i > y2; i--) {
+
+            j += n1;
+            k += n2;
+            
+            if (i < 0 || i > GFX_LCD_HEIGHT)
+            continue;
+
+            s = j / TRAPEZOID_QUALITY;
+            gfx_HorizLine(s, i, k / TRAPEZOID_QUALITY-s);
+        }
+    }
+
+    drawTrapezoid(v, (x*powAZp1x50) + GFX_WIDTH_HALF, w, ((x+width)*powAZx50) + GFX_WIDTH_HALF, u, r);
+        
+
+    gfx_SetColor(GFX_BLACK);
+
+    for (uint8_t i = 0; i <= length; i++) {
+        r = (x*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF;
+        gfx_HorizLine(r, ((y)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_HEIGHT_HALF, ((x+width)*powAZx50list[z+RENDER_DIST_Z_BACK+i]) + GFX_WIDTH_HALF-r+1);
+    }
+
+    for (uint8_t i = 0; i <= width; i++) {
+
+        gfx_Line(
+        ((x+i)*powAZp1x50) + GFX_WIDTH_HALF,
+        (a) + GFX_HEIGHT_HALF,
+        ((x+i)*powAZx50) + GFX_WIDTH_HALF,
+        (b) + GFX_HEIGHT_HALF
+        );
+    }
+    
+    setDrawBuffer(current_buffer);
+
+}
+
+
+void blitPrerenderScreen(uint24_t buffer) {
+
+    if (buffer > 1) {
+        buffer = ((buffer-2) * LCD_WIDTH/2) + DBL_BUF2;
+    } else {
+        buffer = (buffer * LCD_WIDTH/2) + DBL_BUF1;
+    }
+    
+    for (uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
+        memcpy(draw_buffer_ctrl+y*LCD_WIDTH, buffer+y*LCD_WIDTH, LCD_WIDTH / 2);
+    }
+}
+
+
+void init_fontlib() {
+
+    // load font
+    fontlib_font_t* my_font = (fontlib_font_t *)my_font_data;
+    fontlib_SetFont(my_font, 0);
+    
+    fontlib_SetTransparency(true);
+    fontlib_SetWindowFullScreen();
+    fontlib_SetColors(0x00,0xff);
+
+}
+
+
+void init_screen() {
+
+    // initialize graphx
+    gfx_Begin();
+    
+    // set palette
+    gfx_SetPalette(mypalette, sizeof mypalette, 0);
+    gfx_SetClipRegion(SCREEN_OFFSET, 0, SCREEN_OFFSET + 128, GFX_LCD_HEIGHT);
+    lcd_Control = 0x13925; // 4 bpp mode
+
+    // set screen display to blank double buffer
+    setScreenBuffer(DBL_BUF2);
+
+    // initialize second buffer
+    setDrawBuffer(BUFFER_2);
+    gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+    gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+    deInterlaceFullBuffer(BUFFER_2);
+
+    // initialize first buffer
+    setDrawBuffer(BUFFER_1);
+    gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+    gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+    deInterlaceFullBuffer(BUFFER_2);
+
+    // initialize first double buffer
+    setDrawBuffer(DBL_BUF1);
+    gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+    gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+    // de-interlacing is not needed, as this is a final rendering stage step
+
+    // set screen display back normal
+    setScreenBuffer(BUFFER_1);
+    setScreenBuffer(BUFFER_1);
+
+}
+
 
 int main(void)
 {
 
     // wait until user releases keys
     while ((kb_Data[1] & kb_2nd) || (kb_Data[6] & kb_Enter)) {
-        msleep(100);  // 100 ms
+        msleep(100);
     }
 
-    gfx_Begin();
+    // initialization
+    init_fontlib();
+    init_screen();
     
-    gfx_SetPalette(mypalette, sizeof mypalette, 0);
-    gfx_SetClipRegion(BASE_X, 0, BASE_X + 128, GFX_LCD_HEIGHT);
-    lcd_Control = 0x13925; // 4 bpp mode
-
-
-    // gfx_ZeroScreen();
-    for (int i = 0; i < 2; i++) {
-        gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
-        gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
-        // de-interlace entire screen
-        for(uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
-            memcpy(&gfx_vbuffer[y][LCD_WIDTH / 2], &gfx_vbuffer[y][0], LCD_WIDTH / 2);
-        }
-
-        gfx_SwapDraw();
-    }
+    // prep 3d environment
     sortCoordinateList(coordinates, LEN(coordinates));
+    preRenderScreen();
 
-    gfx_SetColor(GFX_RED);
-    gfx_SetTextFGColor(GFX_RED);
-
+    // FPS calculation
     uint8_t frame_count = 0;
     clock_t start_time = clock();
     uint8_t fps = 0;
 
+    // while clear not pressed
     while (!(kb_Data[6] & kb_Clear)) {
         
-        // FPS calculation
         frame_count++;
 
+        // do this every second
         if (clock() - start_time >= CLOCKS_PER_SEC) {
+
+            // FPS calculation
             fps = frame_count;
             frame_count = 0;
             start_time = clock();
+
+            // sort objects
             sortCoordinateList(coordinates, LEN(coordinates));
         }
 
@@ -908,61 +1106,28 @@ int main(void)
         // }
 
         
+        // blit prerendered display
+        blitPrerenderScreen(0);
 
-        // FPS counter
-        gfx_SetColor(GFX_BLUE);
-        gfx_FillRectangle_NoClip(SCREEN_OFFSET, 0, VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
-        // gfx_SetTextXY(5,5);
-        // gfx_PrintString("FPS:");
-        // gfx_SetTextXY(35,5);
-        // gfx_PrintUInt(fps, 2);
-        // gfx_SetTextXY(55,5);
-        // gfx_PrintString("X:");
-        // gfx_SetTextXY(70,5);
-        // gfx_PrintInt(player_x, 2);
-        // gfx_SetTextXY(90,5);
-        // gfx_PrintString("Y:");
-        // gfx_SetTextXY(105,5);
-        // gfx_PrintInt(player_y, 2);
-        // gfx_SetTextXY(125,5);
-        // gfx_PrintString("Z:");
-        // gfx_SetTextXY(140,5);
-        // gfx_PrintInt(player_z, 2);
-        // gfx_SetTextXY(275,5);
-        // gfx_PrintString("v0.2.7");
-        
-        
-        gfx_SetColor(GFX_GREEN);
-        drawBasePlane(-player_y, GFX_BLACK, BASE_RENDER_DIST);
-
+        // draw scene
         for (uint8_t i = 0; i < LEN(coordinates); i++) {
             gfx_SetColor(coordinates[i][3]);
             drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, FILLED, GFX_BLACK);
         }
 
-
-        
-        gfx_SetColor(0x00);
-
-        // // outside viewport
-        // gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
-        // gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
-
-        // // de-interlace entire screen
-        // for(uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
-        //     memcpy(&gfx_vbuffer[y][LCD_WIDTH / 2], &gfx_vbuffer[y][0], LCD_WIDTH / 2);
-        // }
+        // draw FPS counter
+        fontlib_SetCursorPosition(20,4);
+        fontlib_DrawUInt(fps, 2);
 
         // de-interlace viewport
-        for(uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
-            memcpy(&gfx_vbuffer[y][LCD_WIDTH / 2 + BASE_X], &gfx_vbuffer[y][BASE_X], LCD_WIDTH / 2 - BASE_X * 2);
-        }
+        deInterlaceViewportBuffer(draw_buffer_ctrl);
 
-
-        gfx_SwapDraw();
+        // swap roles of the buffers
+        swapBuffer();
 
     }
 
+    // program end
     gfx_End();
     return 0;
 }
