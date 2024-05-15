@@ -1047,7 +1047,7 @@ void init_screen() {
 
     // set screen display back normal
     setScreenBuffer(BUFFER_1);
-    setScreenBuffer(BUFFER_1);
+    setDrawBuffer(BUFFER_1);
 
 }
 
