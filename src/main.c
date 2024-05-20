@@ -121,6 +121,20 @@ static int8_t player_y = -2;
 static int8_t player_z = 0;
 
 
+void waitForBufferScan(void) {
+
+    volatile uint24_t n = lcd_UpBaseCurr;
+
+    usleep(1);
+
+    while (n != lcd_UpBaseCurr) {
+
+        n = lcd_UpBaseCurr;
+        usleep(1);
+    }
+}
+
+
 void deInterlaceFullBuffer(uint24_t buffer) {
     for(uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
         memcpy(&gfx_vbuffer[y][LCD_WIDTH / 2], &gfx_vbuffer[y][0], LCD_WIDTH / 2);}
@@ -1104,8 +1118,10 @@ int main(void)
         // } else if (kb_Data[2] & kb_Alpha) {
         //     player_y -= 1;
         // }
-
         
+        // this eliminates flickering
+        waitForBufferScan();
+
         // blit prerendered display
         blitPrerenderScreen(0);
 
@@ -1116,8 +1132,24 @@ int main(void)
         }
 
         // draw FPS counter
+        fontlib_SetTransparency(true);
+        fontlib_SetForegroundColor(GFX_BLACK);
         fontlib_SetCursorPosition(20,4);
         fontlib_DrawUInt(fps, 2);
+
+        // gfx_SetColor(GFX_BLACK);
+        // gfx_FillRectangle_NoClip(0,0,8,16);
+        // fontlib_SetForegroundColor
+
+        fontlib_SetTransparency(false);
+        fontlib_SetColors(GFX_BLUE, GFX_BLACK);
+        fontlib_SetCursorPosition(3,3);
+
+        if (draw_buffer_ctrl == BUFFER_1) {
+            fontlib_DrawUInt(1,1);
+        } else {
+            fontlib_DrawUInt(2,1);
+        }
 
         // de-interlace viewport
         deInterlaceViewportBuffer(draw_buffer_ctrl);
