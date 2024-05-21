@@ -16,10 +16,15 @@
 #define draw_buffer_ctrl lcd_LpBase
 #define screen_buffer_ctrl lcd_UpBase
 #define gfx_vram (**(uint8_t(**)[240][320])0xD40000)  // gfx_vram define override
-#define DBL_BUF1 0xD49600
+// #define DBL_BUF1 0xD49600
+// #define DBL_BUF2 0xD5C200
+// #define BUFFER_1 0xD40000
+// #define BUFFER_2 0xd52c00
+
+#define DBL_BUF1 0xd52c00
 #define DBL_BUF2 0xD5C200
 #define BUFFER_1 0xD40000
-#define BUFFER_2 0xd52c00
+#define BUFFER_2 0xD49600
 
 #define FOV 0.8
 #define LEN(arr) ((int) (sizeof (arr) / sizeof (arr)[0]))
@@ -906,7 +911,7 @@ static void drawBasePlane(int8_t y, uint8_t outline_color, uint8_t type) {
 void preRenderScreen() {
     
     uint24_t current_buffer = draw_buffer_ctrl;
-    setDrawBuffer(DBL_BUF1);
+    setDrawBuffer(DBL_BUF1-16);
 
     // sky
     gfx_SetColor(GFX_BLUE);
@@ -1008,7 +1013,7 @@ void blitPrerenderScreen(uint24_t buffer) {
     }
     
     for (uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
-        memcpy(draw_buffer_ctrl+y*LCD_WIDTH, buffer+y*LCD_WIDTH, LCD_WIDTH / 2);
+        memcpy((draw_buffer_ctrl+y*LCD_WIDTH)+16, buffer+y*LCD_WIDTH, (LCD_WIDTH / 2)-32);
     }
 }
 
@@ -1051,11 +1056,11 @@ void init_screen() {
     gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
     deInterlaceFullBuffer(BUFFER_2);
 
-    // initialize first double buffer
-    setDrawBuffer(DBL_BUF1);
-    gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
-    gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
-    // de-interlacing is not needed, as this is a final rendering stage step
+    // // initialize first double buffer
+    // setDrawBuffer(DBL_BUF1);
+    // gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+    // gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+    // // de-interlacing is not needed, as this is a final rendering stage step
 
     // set screen display back normal
     setScreenBuffer(BUFFER_1);
