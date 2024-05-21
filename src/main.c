@@ -225,7 +225,7 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
         uint8_t clip = CLIP;
 
         // determines route of action for clipping
-        if ((r < SCREEN_OFFSET+VIEWPORT_LENGTH) && (p >= SCREEN_OFFSET) && (o >= 0) && (q < GFX_LCD_HEIGHT)) {
+        if ((r < SCREEN_OFFSET+VIEWPORT_LENGTH) && (p >= SCREEN_OFFSET) && (o >= 1) && (q < GFX_LCD_HEIGHT)) {
             clip = NO_CLIP;
         } else if ((u > SCREEN_OFFSET+VIEWPORT_LENGTH) || (w < SCREEN_OFFSET) || (t > GFX_LCD_HEIGHT) || (v < 0)) {
             clip = SKIP_RENDER;
@@ -913,6 +913,8 @@ void preRenderScreen() {
     uint24_t current_buffer = draw_buffer_ctrl;
     setDrawBuffer(DBL_BUF1-16);
 
+    gfx_SetClipRegion(16, 0, 128+16, GFX_LCD_HEIGHT);
+
     // sky
     gfx_SetColor(GFX_BLUE);
     gfx_FillRectangle_NoClip(SCREEN_OFFSET, 0, VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
@@ -1000,6 +1002,7 @@ void preRenderScreen() {
     }
     
     setDrawBuffer(current_buffer);
+    gfx_SetClipRegion(SCREEN_OFFSET, 0, SCREEN_OFFSET + 128, GFX_LCD_HEIGHT);
 
 }
 
@@ -1139,18 +1142,7 @@ int main(void)
             gfx_SetColor(coordinates[i][3]);
 
             // for stress testing
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, FILLED, GFX_BLACK);
         }
 
         // draw FPS counter
