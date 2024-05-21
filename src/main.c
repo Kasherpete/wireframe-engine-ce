@@ -79,6 +79,10 @@
 // auto-generated, do not tamper
 const static uint8_t powAZx50list[] = {255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 238, 191, 153, 122, 98, 78, 62, 50, 40, 32, 26, 20, 16, 13, 10, 8, 7, 5, 4, 3, 3, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
+const uint8_t vertexCacheList[50][32] = {
+    #include "../utils/vertexCacheList.inc"
+};
+
 // font data
 static uint8_t my_font_data[] = {
     #include "../font/myfont.inc"
@@ -196,21 +200,15 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
     // render distance calculations. needs improvement
     if (RENDER_DISTANCE_ALGORITHM) {
 
-        // get pre-calculated values
-        const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
-        const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK-1];
-
-        // calculate values - data type needs to go from -1 to 241 height, 321 width
-        // potential optimization here. willing to make viewport 255x255
-
-        const int24_t w = (x*powAZx50) + GFX_WIDTH_HALF;
-        const int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
-        const int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
-        const int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
-        const int24_t r = (x*powAZp1x50) + GFX_WIDTH_HALF;
-        const int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
-        const int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
-        const int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
+        // now pre-calculated
+        const uint8_t w = vertexCacheList[z+RENDER_DIST_Z_BACK][x+RENDER_DIST_X];        //(x*powAZx50) + GFX_WIDTH_HALF;       
+        const uint8_t v = vertexCacheList[z+RENDER_DIST_Z_BACK][y+RENDER_DIST_X]-20;     // (y*powAZx50) + GFX_HEIGHT_HALF;      
+        const uint8_t u = vertexCacheList[z+RENDER_DIST_Z_BACK][x-1+RENDER_DIST_X];      // ((x-1)*powAZx50) + GFX_WIDTH_HALF;   
+        const uint8_t t = vertexCacheList[z+RENDER_DIST_Z_BACK][y-1+RENDER_DIST_X]-20;   // ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
+        const uint8_t r = vertexCacheList[z-1+RENDER_DIST_Z_BACK][x+RENDER_DIST_X];      // (x*powAZp1x50) + GFX_WIDTH_HALF; 
+        const uint8_t q = vertexCacheList[z-1+RENDER_DIST_Z_BACK][y+RENDER_DIST_X]-20;   // (y*powAZp1x50) + GFX_HEIGHT_HALF; 
+        const uint8_t p = vertexCacheList[z-1+RENDER_DIST_Z_BACK][x-1+RENDER_DIST_X];    // ((x-1)*powAZp1x50) + GFX_WIDTH_HALF; 
+        const uint8_t o = vertexCacheList[z-1+RENDER_DIST_Z_BACK][y-1+RENDER_DIST_X]-20; // ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
 
         // tiny optimization. not sure if this has any benefit
         const uint8_t wup1 = w-u+1;
@@ -1087,6 +1085,10 @@ int main(void)
     clock_t start_time = clock();
     uint8_t fps = 0;
 
+    
+    timer_Set(2, 0);
+    timer_Enable(2, TIMER_CPU, TIMER_NOINT, TIMER_UP);
+
     // while clear not pressed
     while (!(kb_Data[6] & kb_Clear)) {
         
@@ -1125,10 +1127,25 @@ int main(void)
         // blit prerendered display
         blitPrerenderScreen(0);
 
+        timer_Set(2, 0);
+
         // draw scene
         for (uint8_t i = 0; i < LEN(coordinates); i++) {
             gfx_SetColor(coordinates[i][3]);
-            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, FILLED, GFX_BLACK);
+
+            // for stress testing
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
+            drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, WIREFRAME, GFX_BLACK);
         }
 
         // draw FPS counter

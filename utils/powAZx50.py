@@ -1,7 +1,8 @@
 import math
+import pathlib
 
 
-file_path = "src/main.c"
+file_path = f"{pathlib.Path(__file__).parent.resolve()}/../src/main.c"
 
 try:
     open(file_path)
