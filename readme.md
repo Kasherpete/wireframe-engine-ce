@@ -2,7 +2,9 @@
 
 This is just a simple algorithm for the TI-84+ CE to render simple voxels quickly and dynamically. For now it is just an engine/algorithm, but once it is in a ready stage, it will be used to make a couple games.
 
-![gif](https://cdn.discordapp.com/attachments/1168344250908418078/1168599163961868358/screen.gif) ![image](https://cdn.discordapp.com/attachments/772599413247442948/1168328775025561660/wireframe1.png)
+![gif](https://cdn.discordapp.com/attachments/1168344250908418078/1177019478593241098/tunneldemo.gif?ex=6ad0b10f&is=6acf5f8f&hm=825f474176c56a3a043ea621bddc756477e9f0d6733d96df017c3b756bf06e6d&)
+
+![gif](https://cdn.discordapp.com/attachments/1168344250908418078/1177019478370959410/mcdemo.gif?ex=6ad0b10f&is=6acf5f8f&hm=4c2a8e811679fa6be8335baec4dd97533533daafc148385596095d7847c41b40&) 
 
 ### Setup
 
