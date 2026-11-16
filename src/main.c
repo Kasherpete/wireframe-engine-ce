@@ -1016,7 +1016,7 @@ void blitPrerenderScreen(uint24_t buffer) {
     }
     
     for (uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
-        memcpy((draw_buffer_ctrl+y*LCD_WIDTH)+16, buffer+y*LCD_WIDTH, (LCD_WIDTH / 2)-32);
+        memcpy((void *)((draw_buffer_ctrl+y*LCD_WIDTH)+16), (void *)(buffer+y*LCD_WIDTH), (LCD_WIDTH / 2)-32);
     }
 }
 

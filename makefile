@@ -10,8 +10,8 @@ COMPRESSED = YES
 COMPRESSED_MODE = zx0
 ARCHIVED = NO
 
-CFLAGS = -Wall -Wextra -Ofast
-CXXFLAGS = -Wall -Wextra -Ofast
+CFLAGS = -Wall -Wextra -O3 -ffast-math
+CXXFLAGS = -Wall -Wextra -O3 -ffast-math
 
 # ----------------------------
 

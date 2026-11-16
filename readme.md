@@ -10,6 +10,18 @@ This is just a simple algorithm for the TI-84+ CE to render simple voxels quickl
 
 In `main.c`, you will find some `#define`'s at the top. Just configure them to your needs. If you change any of the Z render distances or FOV, make sure to run `powAZx50` found in /utils. This script pre-calculates any needed values. If you change anything regarding the Z render distance, FOV, or `powAZx50` variables within `main.c`, make sure to double check the Python script since it automatically handles constants in `main.c`.
 
+If you run into issues with VScode's C/C++ extension pack, it's probably because of `c_cpp_properties.json` in the `.vscode` directory. You'll need to edit this file and include the path of your personal CEdev location. From the CE Toolchain docs:
+
+```
+## Open IntelliSense Configurations Screen
+
+Open the Command Palette (Ctrl+Shift+P) and select C/C++: Edit configurations (UI).
+
+## Set Compiler Options
+
+Set the value of the “Compiler path” option to be the path to the ez80-clang executable in the bin directory of your toolchain installation, e.g. /home/john/CEdev/bin/ez80-clang. Also set the “Include path” option to the path to the include directory (e.g. /home/john/CEdev/include). Make sure to remove/replace the original value of ${default}, rather than just adding the path at the end.
+```
+
 ### TODO
 
 
