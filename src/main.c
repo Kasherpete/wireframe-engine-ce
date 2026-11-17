@@ -1078,6 +1078,7 @@ int main(void)
     // wait until user releases keys
     while ((kb_Data[1] & kb_2nd) || (kb_Data[6] & kb_Enter)) {
         msleep(100);
+        kb_Scan();
     }
 
     // initialization
@@ -1115,6 +1116,7 @@ int main(void)
         }
 
         // handle input
+        kb_Scan();
         if (kb_Data[7] & kb_Up) {
             player_z += 1;
         } else if (kb_Data[7] & kb_Down) {

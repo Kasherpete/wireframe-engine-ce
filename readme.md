@@ -10,6 +10,8 @@ This is just a simple algorithm for the TI-84+ CE to render simple voxels quickl
 
 In `main.c`, you will find some `#define`'s at the top. Just configure them to your needs. If you change any of the Z render distances or FOV, make sure to run `powAZx50` found in /utils. This script pre-calculates any needed values. If you change anything regarding the Z render distance, FOV, or `powAZx50` variables within `main.c`, make sure to double check the Python script since it automatically handles constants in `main.c`.
 
+**NOTE:** You will need at least version v22 of the ez80-clang LLVM compiler. As of this writing, only version v19 is bundled with CEdev, meaning you will need to install either the nightly toolchain or nightly compiler. If you already have the CEdev toolchain installed, you can download the [nightly compiler release package](https://github.com/CE-Programming/llvm-project/releases/nightly) and extract both ez80-clang and ez80-link to the `CEdev/bin` folder.
+
 If you run into issues with VScode's C/C++ extension pack, it's probably because of `c_cpp_properties.json` in the `.vscode` directory. You'll need to edit this file and include the path of your personal CEdev location. From the CE Toolchain docs:
 
 ```
