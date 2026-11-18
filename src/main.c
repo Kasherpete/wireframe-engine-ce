@@ -58,11 +58,6 @@
 #define GFX_WHITE   0x88
 
 
-// font data
-static uint8_t my_font_data[] = {
-    #include "../font/myfont.inc"
-};
-
 // palette data
 unsigned char mypalette[32] =
 {
@@ -123,15 +118,19 @@ void waitForBufferScan(void) {
 }
 
 
-void deInterlaceFullBuffer(uint24_t buffer) {
-    for(uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
-        memcpy(&gfx_vbuffer[y][LCD_WIDTH / 2], &gfx_vbuffer[y][0], LCD_WIDTH / 2);}
+// deinterlace.S: for each of the 120 graphx rows from row0, copy bytes 0..width-1 to the LCD row
+// below (+160). width must be 1..160
+void deinterlaceRows(uint8_t *row0, uint24_t width);
+
+// the whole 160 byte width of the frame at buffer
+static void deInterlaceFullBuffer(uint24_t buffer) {
+    deinterlaceRows((uint8_t *)buffer, LCD_WIDTH / 2);
 }
 
 
-void deInterlaceViewportBuffer(uint24_t buffer) {
-    for(uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
-        memcpy(&gfx_vbuffer[y][LCD_WIDTH / 2 + SCREEN_OFFSET], &gfx_vbuffer[y][SCREEN_OFFSET], LCD_WIDTH / 2 - SCREEN_OFFSET * 2);}
+// only the viewport columns of the frame at buffer: the side bars are never redrawn
+static void deInterlaceViewportBuffer(uint24_t buffer) {
+    deinterlaceRows((uint8_t *)buffer + SCREEN_OFFSET, VIEWPORT_LENGTH);
 }
 
 
@@ -414,8 +413,9 @@ static void updateMotion(uint8_t arrows, uint24_t dt) {
 }
 
 
+// no kb_Scan(): main() puts the keypad in continuous scan mode, so kb_Data is always current.
+// kb_Scan() waits for a whole scan, about 62k cycles (1.3 ms) per frame
 static void handleInput(uint24_t dt) {
-    kb_Scan();
     updateMotion(kb_Data[7], dt);
 }
 
@@ -437,6 +437,12 @@ void preRenderScreen() {
 }
 
 
+// Performance: this costs about 127k cycles (2.65 ms) per frame, as much as the whole scene draw.
+// memcpy is an ldir, about 8 cycles per byte for these 15,360 bytes, and that is already the
+// cheapest way to copy on the CE. A copy only pays when the background holds an actual picture:
+// while it is a solid colour (or one colour per row), an asm fill with push measured 58k cycles
+// (about 3.8 per byte, since it only writes). A background drawn every frame is cheaper still if
+// it replaces this clear instead of being drawn on top of it.
 void blitPrerenderScreen(uint24_t buffer) {
 
     const uint8_t *src = (const uint8_t *)((buffer > 1) ? DBL_BUF2 + (buffer - 2) * (LCD_WIDTH / 2)
@@ -452,12 +458,35 @@ void blitPrerenderScreen(uint24_t buffer) {
 }
 
 
-// ---- profiling ----
+// ---- HUD and profiling ----
+// Only in "make hud" builds (SHOW_HUD). Otherwise CYCLES() is 0 and initHud/drawHud are empty, so
+// the compiler removes all of it: the text alone costs about 60k cycles (1.2 ms) per frame.
+#ifdef SHOW_HUD
+
+static uint8_t my_font_data[] = {
+    #include "../font/myfont.inc"
+};
+
 // Timer 2 counts CPU cycles (48 MHz) and is left free-running. Read the low 24 bits directly:
 // timer_Get() hangs with TIMER_CPU (see CLAUDE.md). Differences of two reads are correct across
 // the 24-bit wrap as long as the interval is under 2^24 cycles (349 ms)
 #define CYCLES() (*(volatile uint24_t *)TIMER_COUNT_ADDR(2))
 #define CYCLES_PER_TENTH_MS 4800
+
+
+static void initHud(void) {
+
+    // load font
+    fontlib_font_t* my_font = (fontlib_font_t *)my_font_data;
+    fontlib_SetFont(my_font, 0);
+
+    fontlib_SetTransparency(true);
+    fontlib_SetWindowFullScreen();
+    fontlib_SetColors(0x00,0xff);
+
+    timer_Set(2, 0);
+    timer_Enable(2, TIMER_CPU, TIMER_NOINT, TIMER_UP);
+}
 
 
 // "<label>12.3ms" at logical (20, y). One divide, so ~2k cycles
@@ -472,17 +501,37 @@ static void drawMs(uint8_t y, const char *label, uint24_t cycles) {
 }
 
 
-void init_fontlib() {
+// D: this frame's scene draw. F: the previous frame's total work (everything but the wait)
+static void drawHud(uint8_t fps, uint24_t draw_cycles, uint24_t frame_cycles) {
 
-    // load font
-    fontlib_font_t* my_font = (fontlib_font_t *)my_font_data;
-    fontlib_SetFont(my_font, 0);
-    
     fontlib_SetTransparency(true);
-    fontlib_SetWindowFullScreen();
-    fontlib_SetColors(0x00,0xff);
+    fontlib_SetForegroundColor(GFX_BLACK);
+    fontlib_SetCursorPosition(20,4);
+    fontlib_DrawUInt(fps, 2);
 
+    drawMs(12, "d ", draw_cycles);
+    drawMs(20, "f ", frame_cycles);
+
+    // buffer number, in the left side bar
+    fontlib_SetTransparency(false);
+    fontlib_SetColors(GFX_BLUE, GFX_BLACK);
+    fontlib_SetCursorPosition(3,3);
+    fontlib_DrawUInt(draw_buffer_ctrl == BUFFER_1 ? 1 : 2, 1);
 }
+
+#else
+
+#define CYCLES() 0
+
+static void initHud(void) {}
+
+static void drawHud(uint8_t fps, uint24_t draw_cycles, uint24_t frame_cycles) {
+    (void)fps;
+    (void)draw_cycles;
+    (void)frame_cycles;
+}
+
+#endif
 
 
 void init_screen() {
@@ -508,7 +557,7 @@ void init_screen() {
     setDrawBuffer(BUFFER_1);
     gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
     gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
-    deInterlaceFullBuffer(BUFFER_2);
+    deInterlaceFullBuffer(BUFFER_1);
 
     // // initialize first double buffer
     // setDrawBuffer(DBL_BUF1);
@@ -533,7 +582,7 @@ int main(void)
     }
 
     // initialization
-    init_fontlib();
+    initHud();
     init_screen();
     
     // prep 3d environment
@@ -550,8 +599,9 @@ int main(void)
     // profiling: the previous frame's work time, excluding the wait for the LCD (shown one frame late)
     uint24_t frame_cycles = 0;
 
-    timer_Set(2, 0);
-    timer_Enable(2, TIMER_CPU, TIMER_NOINT, TIMER_UP);
+    // the keypad rescans by itself, so kb_Data stays current without kb_Scan(). Restored on exit
+    const uint8_t kb_mode = kb_GetMode();
+    kb_SetMode(MODE_3_CONTINUOUS);
 
     // while clear not pressed
     while (!(kb_Data[6] & kb_Clear)) {
@@ -607,29 +657,8 @@ int main(void)
         DBG_LAP("scene draw");
         dbg_printf("\n");
 
-        // draw FPS counter
-        fontlib_SetTransparency(true);
-        fontlib_SetForegroundColor(GFX_BLACK);
-        fontlib_SetCursorPosition(20,4);
-        fontlib_DrawUInt(fps, 2);
-
-        // D: this frame's scene draw. F: the previous frame's total work (everything but the wait)
-        drawMs(12, "d ", draw_cycles);
-        drawMs(20, "f ", frame_cycles);
-
-        // gfx_SetColor(GFX_BLACK);
-        // gfx_FillRectangle_NoClip(0,0,8,16);
-        // fontlib_SetForegroundColor
-
-        fontlib_SetTransparency(false);
-        fontlib_SetColors(GFX_BLUE, GFX_BLACK);
-        fontlib_SetCursorPosition(3,3);
-
-        if (draw_buffer_ctrl == BUFFER_1) {
-            fontlib_DrawUInt(1,1);
-        } else {
-            fontlib_DrawUInt(2,1);
-        }
+        // FPS and timings ("make hud" builds only)
+        drawHud(fps, draw_cycles, frame_cycles);
 
         // de-interlace viewport
         deInterlaceViewportBuffer(draw_buffer_ctrl);
@@ -641,6 +670,7 @@ int main(void)
     }
 
     // program end
+    kb_SetMode(kb_mode);
     gfx_End();
     return 0;
 }

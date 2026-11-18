@@ -8,6 +8,7 @@ its `graphx`, `keypadc` and `fontlibc` libraries.
 |---|---|
 | `src/main.c` | display setup, buffers, input and movement, per-frame camera setup, `drawBox` (graphx calls), main loop |
 | `src/project.S` | `projectBox`: per-box culling, projection and clip classification, hand-written assembly |
+| `src/deinterlace.S` | `deinterlaceRows`: the per-frame de-interlace copy (one `ldir` per row) |
 | `src/engine.h` | constants and per-frame camera state shared by `main.c` and `project.S` |
 | `src/projection_tables.{h,c}` | **generated** by `utils/gen_tables.py`; don't edit |
 
@@ -22,15 +23,21 @@ its `graphx`, `keypadc` and `fontlibc` libraries.
 ## Build
 
 ```sh
-make          # release build -> bin/DEMOPRGM.8xp (defines NDEBUG; dbg_printf compiles away)
-make debug    # -O0, dbg_printf enabled
+make          # release build -> bin/DEMOPRGM.8xp (defines NDEBUG; dbg_printf compiles away). No HUD
+make hud      # release build plus the on-screen HUD (FPS, D/F timings, buffer number)
+make debug    # -O0, dbg_printf enabled (combine: make debug hud)
 make clean
 ```
 
+- The HUD is compiled in only when `SHOW_HUD` is defined (`make hud`). Without it, `CYCLES()` is
+  0 and `initHud`/`drawHud` are empty, so the profiling and fontlib code disappear entirely.
+- Objects don't depend on compiler flags, so the makefile writes the variant (`release`, `hud`,
+  `debug`, `debug hud`) to `obj/variant` and makes everything depend on it: switching variants
+  rebuilds the C files. `.S` files don't depend on it, so don't use `SHOW_HUD`/`DEBUG` in them.
+
 - CEdev v15 is installed at `~/CEdev`. The README says ez80-clang v22+ (nightly) is required.
 - `obj/` and `bin/` are build output (gitignored).
-- Expected warnings: `GFX_LCD_WIDTH`/`GFX_LCD_HEIGHT` macro redefinitions, unused `buffer`
-  parameters, and the linker's `.note.GNU-stack` / executable-stack warnings. Anything else is new.
+- Expected warnings: `GFX_LCD_WIDTH`/`GFX_LCD_HEIGHT` macro redefinitions and the linker's `.note.GNU-stack` / executable-stack warnings. Anything else is new.
 - `.S` files in `src/` go through the C preprocessor, then the GNU z80 assembler, so they can
   `#include` headers. Keep `;` comments free of apostrophes, and make sure shared `#define`
   values don't start with `(`: the assembler reads `ld de, (x)` as a memory load.
@@ -44,7 +51,8 @@ SHOTS=6 KEYS='"key|right"' utils/run_cemu.sh bin/DEMOPRGM.8xp /tmp/out
 ```
 
 - The script boots a clean emulated calculator, sends `clibs.8xg` and the program, and takes a
-  screenshot every 2 s. Read the PNGs to check rendering, and the FPS counter in the top left.
+  screenshot every 2 s. Read the PNGs to check rendering, and (in a `make hud` build) the FPS
+  counter in the top left.
 - **The ROM runs TI-OS 5.8, which blocks native ASM programs.** Launching directly gives
   "ERROR: INVALID". The script also sends arTIfiCE (a TI-BASIC jailbreak, sent as `prgmA`),
   runs it, and launches the program from the arTIfiCE shell.
@@ -100,8 +108,10 @@ with TFT, BGR and power on). graphx doesn't know this and keeps drawing as if th
   drawing, `deInterlaceViewportBuffer` copies bytes 16–143 of every row to bytes 176–303. That
   duplicates each LCD row, so every logical pixel becomes a 2×2 block.
   - `deInterlaceFullBuffer` does the same for the whole 160-byte width.
-  - Both ignore their `buffer` argument and act on `gfx_vbuffer`, the current draw buffer
-    (`lcd_LpBase`). Set the draw buffer before calling them.
+  - Both act on the frame at their `buffer` argument, and both call `deinterlaceRows` in
+    `src/deinterlace.S`. That's one `ldir` per row, about 119k cycles for the viewport: `ldir`
+    (about 7.7 cycles per byte) is the cheapest copy on the CE, so only copying fewer rows or
+    bytes would make it faster.
 - **Viewport:** the 3D view is logical x 16–143 (`SCREEN_OFFSET` = 16, `VIEWPORT_LENGTH` =
   128) by y 0–119, which is LCD pixels 32–287. The clip region is set to exactly that. The
   side bars are black and hold HUD text: fontlib isn't limited by the clip region.
@@ -139,12 +149,15 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 1. Measure the frame time `dt` with `clock()` (32768 ticks/s, clamped to 1/8 s). Every second:
    update FPS and re-sort objects (`sortCoordinateList`, painter's order in world space: far z
    first. That's wrong once the camera turns, but wireframe doesn't care; fix it for filling).
-2. `handleInput(dt)` → `updateMotion()`: arrow keys set target speeds, see Movement.
+2. `handleInput(dt)` → `updateMotion()`: arrow keys set target speeds, see Movement. `main` puts
+   the keypad in continuous scan mode (`MODE_3_CONTINUOUS`, restored on exit), so `kb_Data` is
+   always current and the loop never calls `kb_Scan()`: that waits for a full scan, about 62k
+   cycles (1.3 ms).
 3. `setupCamera()` builds the per-frame camera state (below).
 4. `waitForBufferScan()` busy-waits until `lcd_UpBaseCurr` stops changing, so the previous swap
    has taken effect. This removes flicker and is why FPS is quantized.
-5. Blit the background, then `drawBox(X, Y, Z)` every object in the current gfx colour.
-6. Draw the HUD with fontlib: FPS, `D` (this frame's scene draw, i.e. `projectBox` + graphx) and
+5. Blit the background (about 127k cycles, see the comment on `blitPrerenderScreen`), then `drawBox(X, Y, Z)` every object in the current gfx colour.
+6. `make hud` builds only (about 60k cycles): draw the HUD with fontlib: FPS, `D` (this frame's scene draw, i.e. `projectBox` + graphx) and
    `F` (the previous frame's total work, excluding `waitForBufferScan`) in ms, and the buffer
    number. Timer 2 is free-running; `CYCLES()` reads it and differences are valid up to 349 ms.
 7. Run `deInterlaceViewportBuffer`, then `swapBuffer`.
@@ -244,6 +257,10 @@ Measured in CEmu with the CPU-cycle timer:
 - Where the time goes now (60-box test scene, facing north): `projectBox` + call overhead is
   about 237k cycles, and graphx drawing about 430k. Drawing dominates. Turned off-axis, the
   figures are about 300k and 640k.
+- Whole frame, 7-box idle scene, `make hud` (`F` 9.7 ms): de-interlace 119k, background blit
+  127k, scene 123k, HUD about 60k, `setupCamera` 23k, everything else about 6k cycles. Copying
+  memory with `ldir` costs about 8 cycles per byte; a write-only fill with unrolled `push` (SP
+  pointed into the buffer, interrupts off) about 3.8.
 - There's no FPU. Don't introduce `float`/`double` at runtime; precompute in Python.
 - Don't leave `clock()`, `dbg_printf` argument evaluation or other timing calls in hot paths.
   `clock()` isn't removed in release builds even when its result is unused. The `debug` branch
