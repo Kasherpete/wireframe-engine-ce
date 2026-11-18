@@ -203,7 +203,10 @@ static void sortCoordinateList(int8_t coordinates[][COORDINATE_LIST_LENGTH], siz
 static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_color) {
 
     // render distance calculations. needs improvement
+    unsigned long num = clock();
     if (RENDER_DISTANCE_ALGORITHM) {
+        dbg_printf("render Algorithm time: %lu\n", clock() - num);
+        num = clock();
 
         // now pre-calculated
         const uint8_t w = vertexCacheList[z+RENDER_DIST_Z_BACK][x+RENDER_DIST_X];        //(x*powAZx50) + GFX_WIDTH_HALF;       
@@ -219,6 +222,9 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
         const uint8_t wup1 = w-u+1;
         const uint8_t rpp1 = r-p+1;
 
+        dbg_printf("pre-calc: %lu\n", clock() - num);
+        num = clock();
+
         // 0 = on screen
         // 1 = partially on screen
         // 2 = off screen
@@ -230,6 +236,9 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
         } else if ((u > SCREEN_OFFSET+VIEWPORT_LENGTH) || (w < SCREEN_OFFSET) || (t > GFX_LCD_HEIGHT) || (v < 0)) {
             clip = SKIP_RENDER;
         }
+
+        dbg_printf("clip calculation: %lu\n", clock() - num);
+        num = clock();
 
         
         switch (type) {
@@ -243,6 +252,8 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
                 gfx_Line_NoClip(r, o, w, t);
                 gfx_Line_NoClip(p, o, u, t);
                 gfx_Line_NoClip(p, q, u, v);
+                dbg_printf("noclip drawing: %lu\n", clock() - num);
+                num = clock();
                 break;
 
             case CLIP:  // if partly off screen
@@ -252,9 +263,13 @@ static void drawBox(int8_t x, int8_t y, int8_t z, uint8_t type, uint8_t outline_
                 gfx_Line(r, o, w, t);
                 gfx_Line(p, o, u, t);
                 gfx_Line(p, q, u, v);
+                dbg_printf("clipped drawing: %lu\n", clock() - num);
+                num = clock();
                 break;
             
             default:  // if off screen
+            dbg_printf("no drawing: %lu\n", clock() - num);
+            num = clock();
                 break;
             }
             break;
@@ -620,11 +635,17 @@ static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position, uint8_t fi
     if (RENDER_DISTANCE_ALGORITHM) {
 
         // get pre-calculated values
+        unsigned long num = clock();
+        dbg_printf("start drawPanel: %lu\n", clock() - num);
+        num = clock();
         const uint8_t powAZx50 = powAZx50list[z+RENDER_DIST_Z_BACK];
         const uint8_t powAZp1x50 = powAZx50list[z+RENDER_DIST_Z_BACK-1];
 
         const int24_t u = ((x-1)*powAZx50) + GFX_WIDTH_HALF;
         const int24_t t = ((y-1)*powAZx50) + GFX_HEIGHT_HALF;
+
+        dbg_printf("panel pre-calc: %lu\n", clock() - num);
+        num = clock();
 
         switch (position) {
         case PANEL_BACK:
@@ -664,10 +685,15 @@ static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position, uint8_t fi
         case PANEL_LEFT:
         {
 
+            dbg_printf("time to register switches: %lu\n", clock() - num);
+            num = clock();
+
             const int24_t p = ((x-1)*powAZp1x50) + GFX_WIDTH_HALF;
             const int24_t o = ((y-1)*powAZp1x50) + GFX_HEIGHT_HALF;
             const int24_t v = (y*powAZx50) + GFX_HEIGHT_HALF;
             const int24_t q = (y*powAZp1x50) + GFX_HEIGHT_HALF;
+            dbg_printf("inter-calc: %lu\n", clock() - num);
+            num = clock();
 
             if (fill == FILLED) {
                 drawRotateTrapezoid(t, o, q, v, p, u);
@@ -678,6 +704,8 @@ static void drawPanel(int8_t x, int8_t y, int8_t z, uint8_t position, uint8_t fi
             gfx_VertLine(p, o, q-o+1);
             gfx_Line(p, o, u, t);
             gfx_Line(p, q, u, v);
+            dbg_printf("drawing: %lu\n", clock() - num);
+            num = clock();
 
             break;
         }
@@ -1139,6 +1167,8 @@ int main(void)
 
         timer_Set(2, 0);
 
+        unsigned long num = clock();
+
         // draw scene
         for (uint8_t i = 0; i < LEN(coordinates); i++) {
             gfx_SetColor(coordinates[i][3]);
@@ -1146,6 +1176,9 @@ int main(void)
             // for stress testing
             drawBox(coordinates[i][0]-player_x, coordinates[i][1]-player_y, coordinates[i][2]-player_z, FILLED, GFX_BLACK);
         }
+
+        num = clock();
+        dbg_printf("swapdraw time: %lu\n\n", clock() - num);
 
         // draw FPS counter
         fontlib_SetTransparency(true);
