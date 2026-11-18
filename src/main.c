@@ -27,7 +27,7 @@
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-// debug timing. compiled out entirely in release builds (NDEBUG), since clock() is not free
+// Only does clock calculations and logging when building in debug mode
 #ifndef NDEBUG
 #define DBG_TIMER_START() unsigned long dbg_timer = clock()
 #define DBG_LAP(label) do { dbg_printf(label ": %lu\n", clock() - dbg_timer); dbg_timer = clock(); } while (0)
@@ -35,8 +35,6 @@
 #define DBG_TIMER_START() do {} while (0)
 #define DBG_LAP(label) do {} while (0)
 #endif
-
-#define COORDINATE_LIST_LENGTH 4  // number of inside elements
 
 #define GFX_HEIGHT_HALF 60
 #define GFX_WIDTH_HALF  80
@@ -87,6 +85,7 @@ unsigned char mypalette[32] =
 };
 
 // takes about 0.00025 seconds per item to sort
+#define COORDINATE_LIST_LENGTH 4  // number of list elements per voxel
 static int8_t coordinates[][4] = {
         {5, -2, 5, 0x44},
         {5, -1, 5, 0x44},
@@ -98,12 +97,12 @@ static int8_t coordinates[][4] = {
 };
 
 // Player state. Position is 16.16 fixed point world units. Yaw is in 1/65536 of an angle step,
-// with 256 steps per turn (only the low 24 bits matter): yaw 0 looks along +z, and increasing yaw
-// turns right, towards +x. Velocities ease towards what the keys ask for (handleInput).
+// with 256 steps per turn, so 24 bits are exactly one turn and wrapping is just turning past 360
+// degrees: yaw 0 looks along +z, and increasing yaw turns right, towards +x. Velocities ease towards what the keys ask for (handleInput).
 static int32_t  player_x   = 0;
 static int32_t  player_y   = -(2L << 16);
 static int32_t  player_z   = 0;
-static uint32_t player_yaw = 0;
+static uint24_t player_yaw = 0;
 static int24_t  walk_vel   = 0;   // 1/256 units per second, along the view direction
 static int24_t  turn_vel   = 0;   // 1/256 steps per second
 static uint8_t  snapping   = 0;   // easing into the nearest N/E/S/W
@@ -160,9 +159,9 @@ void swapBuffer() {
 }
 
 
-static int24_t absInt(int24_t v) {
-    return v < 0 ? -v : v;
-}
+// static int24_t absInt(int24_t v) {
+//     return v < 0 ? -v : v;
+// }
 
 
 // painter's order in world space. only matters once boxes are filled, and with rotation it
@@ -176,7 +175,7 @@ static int compareCoordinates(const void *a, const void *b) {
         return (coord2[2] - coord1[2]);
     }
 
-    return (absInt(coord2[0] - cam_cell_x) + absInt(coord2[1])) - (absInt(coord1[0] - cam_cell_x) + absInt(coord1[1]));
+    return (abs(coord2[0] - cam_cell_x) + abs(coord2[1])) - (abs(coord1[0] - cam_cell_x) + abs(coord1[1]));
 }
 
 
@@ -453,6 +452,26 @@ void blitPrerenderScreen(uint24_t buffer) {
 }
 
 
+// ---- profiling ----
+// Timer 2 counts CPU cycles (48 MHz) and is left free-running. Read the low 24 bits directly:
+// timer_Get() hangs with TIMER_CPU (see CLAUDE.md). Differences of two reads are correct across
+// the 24-bit wrap as long as the interval is under 2^24 cycles (349 ms)
+#define CYCLES() (*(volatile uint24_t *)TIMER_COUNT_ADDR(2))
+#define CYCLES_PER_TENTH_MS 4800
+
+
+// "<label>12.3ms" at logical (20, y). One divide, so ~2k cycles
+static void drawMs(uint8_t y, const char *label, uint24_t cycles) {
+    const uint24_t tenths = cycles / CYCLES_PER_TENTH_MS;
+    fontlib_SetCursorPosition(20, y);
+    fontlib_DrawString(label);
+    fontlib_DrawUInt(tenths / 10, 1);
+    fontlib_DrawGlyph('.');
+    fontlib_DrawUInt(tenths % 10, 1);
+    fontlib_DrawString("ms");
+}
+
+
 void init_fontlib() {
 
     // load font
@@ -528,13 +547,16 @@ int main(void)
     clock_t last_time = start_time;
     uint8_t fps = 0;
 
-    
+    // profiling: the previous frame's work time, excluding the wait for the LCD (shown one frame late)
+    uint24_t frame_cycles = 0;
+
     timer_Set(2, 0);
     timer_Enable(2, TIMER_CPU, TIMER_NOINT, TIMER_UP);
 
     // while clear not pressed
     while (!(kb_Data[6] & kb_Clear)) {
-        
+
+        const uint24_t frame_start = CYCLES();
         frame_count++;
 
         // frame time for smooth movement
@@ -560,13 +582,15 @@ int main(void)
         handleInput(dt);
         setupCamera();
 
-        // this eliminates flickering
+        // this eliminates flickering. Idle time, so it is left out of the frame time
+        uint24_t wait_cycles = CYCLES();
         waitForBufferScan();
+        wait_cycles = CYCLES() - wait_cycles;
 
         // blit prerendered display
         blitPrerenderScreen(0);
 
-        timer_Set(2, 0);
+        const uint24_t draw_start = CYCLES();
 
         DBG_TIMER_START();
 
@@ -577,6 +601,9 @@ int main(void)
             drawBox(coordinates[i][0], coordinates[i][1], coordinates[i][2]);
         }
 
+        // scene draw time: projectBox + graphx
+        const uint24_t draw_cycles = CYCLES() - draw_start;
+
         DBG_LAP("scene draw");
         dbg_printf("\n");
 
@@ -585,6 +612,10 @@ int main(void)
         fontlib_SetForegroundColor(GFX_BLACK);
         fontlib_SetCursorPosition(20,4);
         fontlib_DrawUInt(fps, 2);
+
+        // D: this frame's scene draw. F: the previous frame's total work (everything but the wait)
+        drawMs(12, "d ", draw_cycles);
+        drawMs(20, "f ", frame_cycles);
 
         // gfx_SetColor(GFX_BLACK);
         // gfx_FillRectangle_NoClip(0,0,8,16);
@@ -606,6 +637,7 @@ int main(void)
         // swap roles of the buffers
         swapBuffer();
 
+        frame_cycles = CYCLES() - frame_start - wait_cycles;
     }
 
     // program end

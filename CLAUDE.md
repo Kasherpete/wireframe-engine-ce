@@ -144,14 +144,16 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 4. `waitForBufferScan()` busy-waits until `lcd_UpBaseCurr` stops changing, so the previous swap
    has taken effect. This removes flicker and is why FPS is quantized.
 5. Blit the background, then `drawBox(X, Y, Z)` every object in the current gfx colour.
-6. Draw the HUD (FPS and buffer number) with fontlib.
+6. Draw the HUD with fontlib: FPS, `D` (this frame's scene draw, i.e. `projectBox` + graphx) and
+   `F` (the previous frame's total work, excluding `waitForBufferScan`) in ms, and the buffer
+   number. Timer 2 is free-running; `CYCLES()` reads it and differences are valid up to 349 ms.
 7. Run `deInterlaceViewportBuffer`, then `swapBuffer`.
 
 ## Movement
 
-- Position is 16.16 fixed point world units (`int32_t player_x/y/z`). Yaw is `uint32_t` in
-  1/65536 of an angle step, with 256 steps per turn (only the low 24 bits matter). Yaw 0 looks
-  along +z; increasing yaw turns right, towards +x.
+- Position is 16.16 fixed point world units (`int32_t player_x/y/z`). Yaw is `uint24_t` in
+  1/65536 of an angle step, with 256 steps per turn, so 2^24 is exactly one turn and wrapping is
+  just turning past 360°. Yaw 0 looks along +z; increasing yaw turns right, towards +x.
 - Up/Down walk along the view direction, Left/Right turn. Walking and turning speeds ease
   towards the target (full speed or a stop in 1/8 s) and are scaled by `dt`, so they don't
   change with FPS.
@@ -193,8 +195,6 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
   (`SUBUNITS`, `FOCAL_LENGTH`, `RENDER_DIST`, `NEAR_PLANE`, `LOG_STEPS`…) and run
   `python3 utils/gen_tables.py`. It writes `src/projection_tables.{h,c}` (about 22 KB of tables).
   `main.c` static-asserts the assumptions it makes, e.g. `FOCAL_LENGTH` is half the viewport.
-- `utils/powAZx50.py`, `utils/vertice_gen.py` and `utils/vertexCacheList.inc` belong to the old
-  exponential projection and are obsolete.
 
 ## Clipping conventions
 
