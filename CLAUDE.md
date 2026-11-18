@@ -1,8 +1,15 @@
 # CLAUDE.md
 
 A voxel/wireframe 3D renderer for the TI-84 Plus CE (eZ80 CPU at 48 MHz, no FPU, no hardware
-divide, 24-bit `int`). It's written in C against the CE toolchain (CEdev) and its `graphx`,
-`keypadc` and `fontlibc` libraries. Everything lives in `src/main.c`.
+divide, 24-bit `int`). It's written in C and eZ80 assembly against the CE toolchain (CEdev) and
+its `graphx`, `keypadc` and `fontlibc` libraries.
+
+| File | Contents |
+|---|---|
+| `src/main.c` | display setup, buffers, input and movement, per-frame camera setup, `drawBox` (graphx calls), main loop |
+| `src/project.S` | `projectBox`: per-box culling, projection and clip classification, hand-written assembly |
+| `src/engine.h` | constants and per-frame camera state shared by `main.c` and `project.S` |
+| `src/projection_tables.{h,c}` | **generated** by `utils/gen_tables.py`; don't edit |
 
 ## Priorities
 
@@ -22,10 +29,12 @@ make clean
 
 - CEdev v15 is installed at `~/CEdev`. The README says ez80-clang v22+ (nightly) is required.
 - `obj/` and `bin/` are build output (gitignored).
-- Expected warnings: `GFX_LCD_WIDTH`/`GFX_LCD_HEIGHT`/`gfx_vram` macro redefinitions, unused
-  `buffer` parameters, and unused `drawPanel`/`drawPlane` helpers. Anything else is new.
-- Things only compile-checked: nothing in `main()` calls `drawPlane`, `drawPanel` or
-  `drawBasePlane`. Changes there need a temporary call added in `main()` to be exercised.
+- Expected warnings: `GFX_LCD_WIDTH`/`GFX_LCD_HEIGHT` macro redefinitions, unused `buffer`
+  parameters, and the linker's `.note.GNU-stack` / executable-stack warnings. Anything else is new.
+- `.S` files in `src/` go through the C preprocessor, then the GNU z80 assembler, so they can
+  `#include` headers. Keep `;` comments free of apostrophes, and make sure shared `#define`
+  values don't start with `(`: the assembler reads `ld de, (x)` as a memory load.
+- After adding or removing a header, `make clean`: stale dependency files otherwise break the build.
 
 ## Running in CEmu (you can do this yourself)
 
@@ -49,7 +58,9 @@ SHOTS=6 KEYS='"key|right"' utils/run_cemu.sh bin/DEMOPRGM.8xp /tmp/out
 - Kill CEmu by PID (`pgrep -x cemu`). `pkill -f` patterns can match your own shell.
 - Limitations:
   - Key presses run faster than wall-clock time, so their timing relative to screenshots is
-    loose. The player starts at (0,-2,0), so take the "idle" shots with no `KEYS`.
+    loose. `KEYS` can only tap keys, not hold them. The player starts at (0,-2,0) facing +z, so
+    take the "idle" shots with no `KEYS`. To test held keys or a specific yaw, call
+    `updateMotion()` or set `player_*` directly in a scratch copy.
   - `dbg_printf` output is not captured. To inspect values, draw them on screen with
     `fontlib_DrawInt` in a scratch copy of the source.
   - The headless `cemu-autotester` only compares CRCs of memory ranges. It can't take
@@ -57,6 +68,13 @@ SHOTS=6 KEYS='"key|right"' utils/run_cemu.sh bin/DEMOPRGM.8xp /tmp/out
 - **The FPS counter is quantized to 60/n (60, 30, 20, 15…)** because `waitForBufferScan`
   syncs every frame to the LCD refresh. A real speedup only shows when it crosses one of these
   steps, so compare readings across several screenshots and scenes.
+- **Measure in CPU cycles instead.** Timer 2 runs at the CPU clock (`main` enables it). In a
+  scratch copy, read it with `*(volatile uint24_t *)TIMER_COUNT_ADDR(2)` around the code and
+  draw the difference with `fontlib_DrawUInt`. Don't use `timer_Get()`: with `TIMER_CPU` it
+  re-reads until two reads match, which never happens, so it hangs.
+- **Verify asm changes against C.** Keep a plain-C reference of the same maths in a scratch
+  copy, run both over many boxes and camera states (sub-unit positions, cardinal and arbitrary
+  yaws, grid-range edges), and draw the mismatch count. That is how `project.S` was checked.
 
 ## Display: the 4bpp half-resolution trick
 
@@ -99,7 +117,7 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 |------------|---------------------|--------------------------------------------------------|
 | `BUFFER_1` | 0xD40000 – 0xD495FF | frame A (draw/display, swapped each frame)             |
 | `BUFFER_2` | 0xD49600 – 0xD52BFF | frame B                                                |
-| `DBL_BUF1` | 0xD52C00 – 0xD5C1FF | pre-rendered background (sky + ground grid)            |
+| `DBL_BUF1` | 0xD52C00 – 0xD5C1FF | pre-rendered background (currently sky only)           |
 | `DBL_BUF2` | 0xD5C200 – 0xD657FF | blank frame shown during `init_screen` to hide setup   |
 
 - `draw_buffer_ctrl` is `lcd_LpBase`. graphx draws wherever it points (`gfx_vbuffer` reads
@@ -108,92 +126,142 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 - `preRenderScreen()` draws the background once, with the draw base set to `DBL_BUF1 - 16`.
   That makes logical x = 16 land at offset 0, so the stored rows are 128 bytes of viewport
   data at a 320-byte stride.
-  - It depends on `player_y`, but x/z movement doesn't change it: the grid repeats every
-    unit. It must be re-run if the ground or `player_y` changes.
+  - It is only a sky fill for now. The old ground grid used the old projection and was
+    removed; a ground drawn with rotation would have to be redrawn every frame.
 - Each frame, `blitPrerenderScreen(0)` memcpys those 120 × 128 bytes into the draw buffer at
   x = 16.
 - Don't use `gfx_SetDrawBuffer`, `gfx_SwapDraw`, `gfx_Blit*`, `gfx_FillScreen` or
   `gfx_ZeroScreen`. They assume 76,800-byte 8bpp buffers at graphx's own addresses: they would
   write across two of these frames, or into the pre-rendered background.
-- The `gfx_vram` macro at the top of `main.c` is unused and wrong: it dereferences pixel data
-  as a pointer. Don't use it.
 
 ## Frame pipeline (`main`)
 
-1. Every second: update FPS, re-sort objects (`sortCoordinateList`, painter's order: far z
-   first, then Manhattan distance in x/y).
-2. `kb_Scan()` and arrow keys move the player one unit per frame. There's no time delta, and
-   it's `else if`, so only one axis moves at a time.
-3. `waitForBufferScan()` busy-waits until `lcd_UpBaseCurr` stops changing, so the previous swap
+1. Measure the frame time `dt` with `clock()` (32768 ticks/s, clamped to 1/8 s). Every second:
+   update FPS and re-sort objects (`sortCoordinateList`, painter's order in world space: far z
+   first. That's wrong once the camera turns, but wireframe doesn't care; fix it for filling).
+2. `handleInput(dt)` → `updateMotion()`: arrow keys set target speeds, see Movement.
+3. `setupCamera()` builds the per-frame camera state (below).
+4. `waitForBufferScan()` busy-waits until `lcd_UpBaseCurr` stops changing, so the previous swap
    has taken effect. This removes flicker and is why FPS is quantized.
-4. Blit the background, then draw every object back to front with `drawBox(..., FILLED, ...)`.
-5. Draw the HUD (FPS and buffer number) with fontlib.
-6. Run `deInterlaceViewportBuffer`, then `swapBuffer`.
+5. Blit the background, then `drawBox(X, Y, Z)` every object in the current gfx colour.
+6. Draw the HUD with fontlib: FPS, `D` (this frame's scene draw, i.e. `projectBox` + graphx) and
+   `F` (the previous frame's total work, excluding `waitForBufferScan`) in ms, and the buffer
+   number. Timer 2 is free-running; `CYCLES()` reads it and differences are valid up to 349 ms.
+7. Run `deInterlaceViewportBuffer`, then `swapBuffer`.
 
-## Projection and lookup tables
+## Movement
 
-- No camera rotation. The camera looks along +z, positions are integers, and screen y grows
-  downward.
-- A box at (x, y, z), relative to the player, occupies [x-1, x]×[y-1, y]×[z-1, z]. Its z-1 face
-  is nearer and larger.
-- Perspective is exponential, not 1/z: `screen = coord * powAZx50[z + RENDER_DIST_Z_BACK] +
-  centre`.
-  - `powAZx50[i] = round(FOV^(i - RENDER_DIST_Z_BACK) * 50)` with `FOV = 0.8`, stored as
-    `uint8_t`.
-  - It saturates at 255 near the camera and reaches 0 far away.
-- `vertexCacheList[z + 20][x + 16]` (`int24_t`) precomputes `x * pow + GFX_WIDTH_HALF`.
-  - `drawBox` reuses it for y by subtracting `Y_TABLE_SHIFT` (80 − 60).
-  - It is signed and unclamped on purpose. Don't go back to clamped `uint8_t`: off-screen
-    vertices then wrap or clamp, which breaks the clip decisions and line slopes.
-- `RENDER_DISTANCE_ALGORITHM` (visible z −2…14, |x| < 16, |y| < 10) gates every table lookup.
-  `_Static_assert`s check that the render-distance constants keep the indices in range.
-- **Regenerating tables** after changing `FOV`, `RENDER_DIST_Z_*` or `RENDER_DIST_X`:
-  1. `cd utils && echo 8 | python3 powAZx50.py`. This **rewrites the `powAZx50list` line in
-     `src/main.c` in place**. Answer 8, since main.c uses `uint8_t`.
-  2. `echo 24 | python3 vertice_gen.py`. This reads `powAZx50list` from main.c and writes
-     `utils/vertexCacheList.inc`. Answer 24, since the table is `int24_t`.
-  3. Keep `#define NAME value` and `const static uint8_t powAZx50list[] = {...};` on one line:
-     both scripts parse main.c by text matching.
+- Position is 16.16 fixed point world units (`int32_t player_x/y/z`). Yaw is `uint24_t` in
+  1/65536 of an angle step, with 256 steps per turn, so 2^24 is exactly one turn and wrapping is
+  just turning past 360°. Yaw 0 looks along +z; increasing yaw turns right, towards +x.
+- Up/Down walk along the view direction, Left/Right turn. Walking and turning speeds ease
+  towards the target (full speed or a stop in 1/8 s) and are scaled by `dt`, so they don't
+  change with FPS.
+- **Snapping:** when a turn is released within `SNAP_RANGE` (8 steps, 11°) of N/E/S/W and has
+  slowed below `SNAP_START`, the yaw eases into it (time constant 0.1 s) and lands on it
+  exactly. Exactly cardinal is the fast path (about 30% faster per box), so landing exactly
+  matters. `SNAP_RANGE` 0 disables it.
+- 32-bit maths is fine here: this runs once per frame.
+
+## Camera and projection
+
+- Camera space: x right, y down (screen y grows downward), z forward. Yaw only, no pitch, so
+  vertical world edges stay vertical on screen.
+- A box at world (X, Y, Z) occupies [X-1, X]×[Y-1, Y]×[Z-1, Z].
+- **Perspective is true 1/z** with a 90° horizontal FOV: `screen = centre + 64 * a / z`.
+- **Units:** camera space is in 1/`SUB` (128) world units, and every value shared with
+  `project.S` is stored **×3**. An `int24_t` table entry is 3 bytes, so a ×3 value is directly a
+  byte offset. Per-frame values must stay exact multiples of 3 (`fillRotTable` builds them
+  unscaled, then triples them).
+- **Rotation, per frame** (`setupCamera`, C): for each grid line within `GRID_RANGE` (24) of the
+  camera cell, tables of `(line − player) × cos/sin`, built by repeated addition, interleaved as
+  `rotX_ = {XC, XS}` and `rotZ_ = {ZS, ZC}`. A grid point's camera space is
+  `x' = XC − ZS`, `z' = XS + ZC`, so a box corner costs two lookups and an add, and the other
+  three corners are fixed per-frame offsets (`cam_k*3`). Also per frame: `camY_`, the index
+  biases and the culling constants. The full list is in `engine.h`.
+- **Projection, per box** (`projectBox` in `project.S`): table lookups only.
+  `64 * a / z = expTable[logTable[|a|] − logTable[z] − EXP_TABLE_MIN]`. logTable entries are
+  ×3 too, so the difference of two entries is a byte offset into expTable.
+- **Culling** happens in camera space before projecting: any corner nearer than `NEAR_PLANE`
+  (0.5 units) or at/beyond `FAR_PLANE` (24 units), or the whole box left/right of `|x| ≤ z`, or
+  above/below `|y| ≤ z`. A box straddling the near plane is skipped rather than clipped, so boxes
+  vanish when you walk into them.
+- **The culling bounds every table index.** `gen_tables.py` proves (with asserts) that for any
+  box passing these exact tests, every logTable/expTable index is in range, so `project.S` has
+  no range checks. **If you change the culling, change the generator's proof with it.** The
+  same bound keeps projected coordinates within about ±510, which graphx's clipped routines
+  handle.
+- **Regenerating tables:** edit the constants at the top of `utils/gen_tables.py`
+  (`SUBUNITS`, `FOCAL_LENGTH`, `RENDER_DIST`, `NEAR_PLANE`, `LOG_STEPS`…) and run
+  `python3 utils/gen_tables.py`. It writes `src/projection_tables.{h,c}` (about 22 KB of tables).
+  `main.c` static-asserts the assumptions it makes, e.g. `FOCAL_LENGTH` is half the viewport.
 
 ## Clipping conventions
 
-- Each primitive computes `clip` = `NO_CLIP` (entirely inside the viewport), `CLIP` (partly
-  inside) or `SKIP_RENDER` (entirely outside).
-  - `NO_CLIP` must be proven against **all** vertices before any `_NoClip` call.
-  - `SKIP_RENDER` should test the whole bounding box: x max < 16, x min ≥ 144, y max < 0 or
-    y min ≥ 120.
+- `projectBox` returns `BOX_SKIP`, `BOX_AXIS_NOCLIP/CLIP` (exactly facing N/E/S/W: near and far
+  faces are rectangles, drawn as 2 `gfx_Rectangle` + 4 lines) or `BOX_GEN_NOCLIP/CLIP` (any other
+  yaw: 4 `gfx_VertLine` + 8 lines). `box_out` holds the coordinates (layout in `engine.h`).
+- A `*_NOCLIP` result must be proven against **all** 8 vertices before any `_NoClip` call.
+  - Axis case: each far vertex lies between the screen centre and its near vertex, and the
+    centre is inside the viewport. So the near face being inside proves the whole box is, and
+    the far face alone decides whether it is entirely off screen.
+  - General case: all 12 coordinates are tested. There's no screen-space skip test (camera-space
+    culling already removed nearly everything), so `BOX_GEN_CLIP` may occasionally be entirely
+    off screen. The clipped calls handle that.
 - `_NoClip` graphx functions take `uint8_t` y and `uint24_t` lengths: negatives wrap to huge
   values. Clipped versions take `int`.
-- Trapezoid fillers (`drawTrapezoid`, `drawRotateTrapezoid` and the `_NoClip` versions) return
-  early on zero height/width, which would otherwise be a division by zero. They skip spans of
-  length ≤ 0.
 
 ## eZ80 performance notes
 
-- `int` is 24 bits and native. `int24_t`/`uint24_t` are the cheapest types for arithmetic and
-  table loads; 8-bit types save memory but need extension.
-- There's no hardware multiply beyond 8×8 and no divide, so division is a library call.
-  - Keep division out of per-pixel and per-scanline loops.
-  - Signed `/ 64` isn't a plain shift. Use a shift when rounding toward −∞ is acceptable.
-- There's no FPU. Don't introduce `float`/`double` at runtime; precompute in the Python scripts.
+Measured in CEmu with the CPU-cycle timer:
+
+- **The CE is memory bound: roughly 2 cycles per byte touched**, opcode and immediate bytes
+  included. Shorter instructions win. A 3-byte absolute address or immediate
+  (`ld hl, (nn)` = 7 bytes moved) costs about twice a `push`/`pop` or `(ix + d)` access.
+  `call`/`ret` moves 8 bytes.
+- **clang never emits the hardware `mlt` (8×8→16) instruction.** Library-call costs, in cycles:
+
+  | Operation | Cycles |
+  |---|---|
+  | 8×8 multiply | ~180 |
+  | 16-bit multiply | ~240 |
+  | 24-bit multiply (including by constants like 96 or 195) | ~380 |
+  | 32-bit multiply | ~680 |
+  | divide | 1,700–2,000 |
+  | right shift (even `>> 8`, even via byte access) | ~250 |
+  | `& 0xff` | library call |
+
+- What's cheap: additions, table lookups, compares, left shifts (`add hl,hl`), multiplying by a
+  power of 2.
+- `x < 0 ? -x : x` and `abs()` become `__icmpzero` + `__ineg` calls.
+- Signed compares compile inline (bias by 0x800000, then an unsigned compare).
+- **Hot per-object code belongs in assembly** (`src/*.S`). ABI: arguments at `sp+3`, `sp+6`,
+  `sp+9` (3 bytes each, even for `char`); 8-bit result in `A`, 24-bit in `HL`. Preserve `IX`;
+  `AF BC DE HL IY` may be clobbered. `ld rr,(hl)` and `lea` are available.
+  - Inline `__asm__` also works (`"+l"` puts a value in HL), but separate `.S` files are easier
+    to reason about.
+- Per-frame code can stay in C: a few library calls per frame don't matter.
+- Where the time goes now (60-box test scene, facing north): `projectBox` + call overhead is
+  about 237k cycles, and graphx drawing about 430k. Drawing dominates. Turned off-axis, the
+  figures are about 300k and 640k.
+- There's no FPU. Don't introduce `float`/`double` at runtime; precompute in Python.
 - Don't leave `clock()`, `dbg_printf` argument evaluation or other timing calls in hot paths.
   `clock()` isn't removed in release builds even when its result is unused. The `debug` branch
-  has profiling calls like this.
-- Prefer lookup tables and precomputation. Release builds use `-O3`.
+  has profiling calls like this. One `clock()` per frame for `dt` is fine.
 
 ## Repository notes
 
 - Branches:
-  - `main`: current code.
+  - `main`: the old engine (exponential projection, integer movement, no rotation).
   - `debug`: `main` plus per-object `clock()` / `dbg_printf` timing calls.
+  - `rewrite`: this rewrite. Wireframe only so far; filling comes later.
 - `gfx/` holds convimg output for the palette. Only `src/` is compiled; `mypalette` in
   `main.c` is the one that's used.
 - `readme.md` has the TODO list and changelog. Its demo GIF links are Discord CDN URLs that
   expire.
-- The project is due for a rewrite. Known problems:
-  - massive duplication (`drawBox` quadrant/clip copies, four trapezoid variants)
-  - dead code
-  - `int8_t` player coordinates that wrap
-  - coarse `uint8_t` perspective table
-  - coarse movement and no camera rotation
-  - odd vertice projection and perspective/FOV
+- Open issues on `rewrite`:
+  - no filled boxes yet
+  - painter's sort is in world space
+  - boxes vanish instead of clipping at the near plane
+  - no ground
+  - scene coordinates are `int8_t`
