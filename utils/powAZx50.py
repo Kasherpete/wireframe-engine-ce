@@ -15,7 +15,7 @@ def find_constant(target_string):
     with open(file_path, 'r') as file:
         for line in file:
             if f'#define {target_string}' in line:
-                return line.split(' ')[2]
+                return line.split()[2]  # any whitespace: the #defines are column-aligned
 
         raise Exception(f'No constant {target_string} found')
 
@@ -65,8 +65,9 @@ value = f"{{{str(list1)[1:-1]}}}"
 
 print(f'\n{value}\n')
 
-if not replace_string_in_file(f'uint8_t powAZx50list[]', f'uint{array_type}_t powAZx50list[] = {value};\n'):
-    if not replace_string_in_file(f'uint24_t powAZx50list[]', f'uint{array_type}_t powAZx50list[] = {value};\n'):
+# keep the exact "const static" form: vertice_gen.py searches for it
+if not replace_string_in_file(f'uint8_t powAZx50list[]', f'const static uint{array_type}_t powAZx50list[] = {value};\n'):
+    if not replace_string_in_file(f'uint24_t powAZx50list[]', f'const static uint{array_type}_t powAZx50list[] = {value};\n'):
         raise Exception('Error while inserting powAZx50 array into the file!')
 
 print('Finished configuring engine pre-calculations!')

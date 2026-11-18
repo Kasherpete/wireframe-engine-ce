@@ -79,7 +79,8 @@ for z in range(len(powAZx50)):
             value[z+back].append(min(maximum, (i*powAZx50[z+back]) + gfx_width_half))
 
 
-raw_value = str(value).replace('[', '{').replace(']', '}\n')[1:-1]
+# one "{...}" initializer per z row, comma-separated (main.c supplies the outer braces)
+raw_value = '\n, '.join('{' + ', '.join(str(n) for n in row) + '}' for row in value) + '\n'
 print(raw_value)
 print(f'size of array in bytes: {(len(value[0])*len(value))*3}')
 print(f'array is {len(value[0])}x{len(value)}.')
