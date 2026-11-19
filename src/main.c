@@ -27,24 +27,11 @@
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-// Only does clock calculations and logging when building in debug mode
-#ifndef NDEBUG
-#define DBG_TIMER_START() unsigned long dbg_timer = clock()
-#define DBG_LAP(label) do { dbg_printf(label ": %lu\n", clock() - dbg_timer); dbg_timer = clock(); } while (0)
-#else
-#define DBG_TIMER_START() do {} while (0)
-#define DBG_LAP(label) do {} while (0)
-#endif
-
 #define GFX_HEIGHT_HALF 60
 #define GFX_WIDTH_HALF  80
 #define GFX_LCD_WIDTH 160
 #define GFX_LCD_HEIGHT 120
 #define VIEWPORT_LENGTH 160
-
-#define NO_CLIP      0
-#define CLIP         1
-#define SKIP_RENDER  2
 
 // FOR TESTING ONLY...NOT ACCURATE
 #define GFX_BLACK   0x00
@@ -79,8 +66,7 @@ unsigned char mypalette[32] =
     0x35, 0x7f, /*  15: rgb(255, 202, 173) */
 };
 
-// takes about 0.00025 seconds per item to sort
-#define COORDINATE_LIST_LENGTH 4  // number of list elements per voxel
+// the scene: x, y, z of each voxel (it spans [X-1, X] x [Y-1, Y] x [Z-1, Z]) and its colour
 static int8_t coordinates[][4] = {
         {5, -2, 5, 0x44},
         {5, -1, 5, 0x44},
@@ -101,7 +87,6 @@ static uint24_t player_yaw = 0;
 static int24_t  walk_vel   = 0;   // 1/256 units per second, along the view direction
 static int24_t  turn_vel   = 0;   // 1/256 steps per second
 static uint8_t  snapping   = 0;   // easing into the nearest N/E/S/W
-static int24_t  cam_cell_x;       // grid cell the camera is in, set by setupCamera() (for the sort)
 
 
 // PL111 "next base update" interrupt flag: set when the LCD loads lcd_UpBase at the start of a
@@ -166,9 +151,12 @@ static uint24_t phaseBuffer(uint8_t phase) {
 
 void swapBuffer() {
 
-    // show the frame just drawn, then set up the next frame in the other buffer
-    lcd_IntAcknowledge = LCD_INT_LNBU;
+    // show the frame just drawn, then set up the next frame in the other buffer. Base first, then
+    // the acknowledge: the other way round, a refresh in between would set the flag for the old base
+    // and waitForBufferScan would return while that frame is still on screen. This way round the
+    // worst case is waiting one refresh too many
     setScreenBuffer(phaseBuffer(field_phase));
+    lcd_IntAcknowledge = LCD_INT_LNBU;
     field_phase = (field_phase + 1) & 3;
     frame_interlaced = interlace_setting;
     setDrawBuffer(phaseBuffer(field_phase) + ((frame_interlaced && (field_phase & 2)) ? LCD_WIDTH / 2 : 0));
@@ -176,29 +164,80 @@ void swapBuffer() {
 }
 
 
-// static int24_t absInt(int24_t v) {
-//     return v < 0 ? -v : v;
-// }
+// ---- painter's order ----
+// Boxes are drawn far to near by their Manhattan distance in grid cells from the camera's cell,
+// |dx| + |dy| + |dz|. For unit voxels on a grid this is an exact painter's order: if box A hides
+// part of box B, the sight line from the camera to B passes through A, and along a line every
+// coordinate is monotonic, so on each axis A's cell lies between the camera's cell and B's. A's
+// distance is then strictly smaller. Equal distances never occlude each other, so ties can go
+// either way. Camera depth (z) is not a valid key: two boxes side by side at the same depth can
+// overlap on screen.
+//
+// The key only depends on which cell the camera is in, not on its yaw or position inside the cell,
+// so the order only changes when the camera crosses into another cell. main() then calls
+// sortScene(), which reorders coordinates[] itself. projectScene() keeps boxes in list order, so
+// the boxes it keeps come out already sorted and a frame without a re-sort pays nothing for it.
+// Walking at full speed crosses about 4 cells per second (up to 6 diagonally); standing still or
+// turning never re-sorts.
+//
+// sortScene() calls sortRecords() in sort.S: a counting sort (stable, no comparisons) over keys
+// 0 .. 3 GRID_RANGE, through a scratch copy. 5.3k cycles for the 7-box scene, 59k for 120 boxes.
 
+// gridDist[n] = |n - GRID_RANGE|: the distance in cells along one axis, for the grid index
+// n = X + cam_bias_x (the one projectBox() uses). The box spans cell X - 1 and the camera is in
+// cell (player x >> 16), so n - GRID_RANGE is their difference (likewise y and z).
+// It is indexed by the low byte of n only, so all 256 entries exist. For every box projectBox()
+// keeps, n is in [0, 2 GRID_RANGE) and the low byte is n itself. For a culled box the low byte
+// may wrap to any entry, which is harmless: where a culled box sorts does not matter. So the key
+// is three 8-bit adds and lookups, with no sign extension or range check. Defined in sort.S,
+// page-aligned
+extern uint8_t gridDist[256];
 
-// painter's order in world space. only matters once boxes are filled, and with rotation it
-// should eventually sort by camera depth instead
-static int compareCoordinates(const void *a, const void *b) {
+static void initGridDist(void) {
+    uint8_t n = 0;
+    do {
+        gridDist[n] = (n >= 2 * GRID_RANGE) ? GRID_RANGE : (n < GRID_RANGE) ? GRID_RANGE - n : n - GRID_RANGE;
+    } while (++n != 0);
+}
 
-    const int8_t *coord1 = (int8_t *)a;
-    const int8_t *coord2 = (int8_t *)b;
+_Static_assert(3 * GRID_RANGE < 256, "distance keys are bytes");
+_Static_assert(LEN(coordinates) <= 255, "sortScene counts and indexes the scene in bytes");
 
-    if ((coord2[2] - coord1[2]) != 0) {
-        return (coord2[2] - coord1[2]);
-    }
+static int8_t  sort_scratch[LEN(coordinates)][4];
+static uint8_t sort_key[LEN(coordinates)];
+static int24_t sorted_bias_x, sorted_bias_y, sorted_bias_z;  // the camera cell coordinates[] is sorted for
 
-    return (abs(coord2[0] - cam_cell_x) + abs(coord2[1])) - (abs(coord1[0] - cam_cell_x) + abs(coord1[1]));
+// sort.S: sorts the n records far to near for camera biases bx, by, bz (the low bytes of
+// cam_bias_*), through scratch[n] and keys[n]. n must be 1 .. 255
+void sortRecords(int8_t (*rec)[4], int8_t (*scratch)[4], uint8_t *keys, uint8_t n,
+                 uint8_t bx, uint8_t by, uint8_t bz);
+
+_Static_assert(LEN(coordinates) >= 1, "sortRecords needs at least one record");
+
+// Sorts coordinates[] far to near from the camera cell setupCamera() last set up
+static void sortScene(void) {
+
+    sortRecords(coordinates, sort_scratch, sort_key, LEN(coordinates),
+                (uint8_t)cam_bias_x, (uint8_t)cam_bias_y, (uint8_t)cam_bias_z);
+    sorted_bias_x = cam_bias_x;
+    sorted_bias_y = cam_bias_y;
+    sorted_bias_z = cam_bias_z;
 }
 
 
-static void sortCoordinateList(int8_t coordinates[][COORDINATE_LIST_LENGTH], size_t numCoordinates) {
-
-    qsort(coordinates, numCoordinates, sizeof(coordinates[0]), compareCoordinates);
+// whether the camera is in another cell than coordinates[] was sorted for (the biases change
+// exactly when the cell does). Ifs, not a combined 0/1 value: see the compiler bug in CLAUDE.md
+static uint8_t sceneOrderStale(void) {
+    if (cam_bias_x != sorted_bias_x) {
+        return 1;
+    }
+    if (cam_bias_y != sorted_bias_y) {
+        return 1;
+    }
+    if (cam_bias_z != sorted_bias_z) {
+        return 1;
+    }
+    return 0;
 }
 
 
@@ -214,14 +253,9 @@ _Static_assert(SIN_TABLE_LEN == 256, "yaw is looked up as a byte");
 _Static_assert(SCREEN_OFFSET == VIEW_X0 && SCREEN_OFFSET + VIEWPORT_LENGTH == VIEW_X1, "engine.h viewport out of sync");
 _Static_assert(GFX_LCD_HEIGHT == VIEW_H && GFX_WIDTH_HALF == CENTRE_X && GFX_HEIGHT_HALF == CENTRE_Y, "engine.h screen out of sync");
 
-// shared with project.S, see engine.h
+// shared with project.S, see engine.h (the cam_ scalars are defined in project.S)
 int24_t cam_bias_x, cam_bias_y, cam_bias_z;
 int24_t rotX_[2 * GRID_LEN], rotZ_[2 * GRID_LEN], camY_[GRID_LEN];
-int24_t cam_cos3, cam_sin3;
-int24_t cam_kxmin3, cam_kxmax3, cam_kzmin3, cam_kzmax3;
-int24_t cam_zlo, cam_zspan, cam_cxl, cam_cxr, cam_cyl;
-uint8_t cam_cardinal;
-int24_t box_out[12];
 
 
 // t[n * stride] = 3 * (n - GRID_RANGE - frac/256) * k, by repeated addition. Built unscaled and
@@ -248,10 +282,10 @@ static void setupCamera(void) {
     cam_cardinal = (player_yaw & 0x3fffff) == 0;  // a multiple of 64 steps, fraction included
 
     // grid cell, and the position within it in 1/256 units
-    cam_cell_x = (int24_t)(player_x >> 16);
+    const int24_t cell_x = (int24_t)(player_x >> 16);
     const int24_t cell_y = (int24_t)(player_y >> 16);
     const int24_t cell_z = (int24_t)(player_z >> 16);
-    cam_bias_x = GRID_RANGE - 1 - cam_cell_x;
+    cam_bias_x = GRID_RANGE - 1 - cell_x;
     cam_bias_y = GRID_RANGE - 1 - cell_y;
     cam_bias_z = GRID_RANGE - 1 - cell_z;
     const int24_t fx = (int24_t)(player_x >> 8) & 0xff;
@@ -282,13 +316,45 @@ static void setupCamera(void) {
 }
 
 
-// Wireframe of the world voxel [X-1, X] x [Y-1, Y] x [Z-1, Z], in the current gfx colour.
-// projectBox() culls, projects and classifies it; this only issues the graphx calls.
-static void drawBox(int24_t X, int24_t Y, int24_t Z) {
+// A box that passed culling, as projectScene() left it for drawScene()
+typedef struct {
+    uint8_t kind;               // BOX_* result of projectBox(), never BOX_SKIP
+    uint8_t colour;
+    int24_t v[BOX_OUT_LEN];     // screen coordinates, layout in engine.h
+} projected_box_t;
 
-    const int24_t *b = box_out;
+static projected_box_t projected[LEN(coordinates)];
+static uint8_t num_projected;
 
-    switch (projectBox(X, Y, Z)) {
+
+// Culls and projects every box into projected[], without drawing. Boxes stay in the order of
+// coordinates[], which sortScene() keeps far to near. main() calls this before
+// waitForBufferScan(), so it runs in time that would otherwise be spent waiting for the LCD
+static void projectScene(void) {
+
+    projected_box_t *p = projected;
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < LEN(coordinates); i++) {
+        const int8_t *c = coordinates[i];
+        const uint8_t kind = projectBox(c[0], c[1], c[2], p->v);
+        if (kind != BOX_SKIP) {
+            p->kind = kind;
+            p->colour = (uint8_t)c[3];
+            p++;
+            n++;
+        }
+    }
+    num_projected = n;
+}
+
+
+// Wireframe of one projected box, in the current gfx colour. projectBox() already culled,
+// projected and classified it; this only issues the graphx calls.
+static void drawBox(const projected_box_t *p) {
+
+    const int24_t *b = p->v;
+
+    switch (p->kind) {
 
     // facing N/E/S/W: near and far faces are screen rectangles. 2 rectangles (fast spans) + 4 lines
     case BOX_AXIS_NOCLIP: {
@@ -353,8 +419,19 @@ static void drawBox(int24_t X, int24_t Y, int24_t Z) {
         break;
     }
 
-    default:  // BOX_SKIP
+    default:  // BOX_SKIP: never stored by projectScene()
         break;
+    }
+}
+
+
+// draws what projectScene() kept, far to near
+static void drawScene(void) {
+
+    const projected_box_t *p = projected;
+    for (uint8_t n = num_projected; n != 0; n--, p++) {
+        gfx_SetColor(p->colour);
+        drawBox(p);
     }
 }
 
@@ -451,14 +528,11 @@ void preRenderScreen() {
     uint24_t current_buffer = draw_buffer_ctrl;
     setDrawBuffer(DBL_BUF1 - SCREEN_OFFSET);
 
-    gfx_SetClipRegion(SCREEN_OFFSET, 0, SCREEN_OFFSET + VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
-
     // sky. the ground grid will come back once the new projection exists
     gfx_SetColor(GFX_BLUE);
     gfx_FillRectangle_NoClip(SCREEN_OFFSET, 0, VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
 
     setDrawBuffer(current_buffer);
-    gfx_SetClipRegion(SCREEN_OFFSET, 0, SCREEN_OFFSET + VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
 
 }
 
@@ -517,7 +591,7 @@ static void initHud(void) {
 }
 
 
-// "<label>12.3ms" at logical (20, y). One divide, so ~2k cycles
+// "<label>12.3ms" at logical (3, y). One divide, so ~2k cycles
 static void drawMs(uint8_t y, const char *label, uint24_t cycles) {
     const uint24_t tenths = cycles / CYCLES_PER_TENTH_MS;
     fontlib_SetCursorPosition(3, y);
@@ -529,11 +603,9 @@ static void drawMs(uint8_t y, const char *label, uint24_t cycles) {
 }
 
 
-// D: this frame's scene draw. F: the previous frame's total work (everything but the wait)
+// D: this frame's scene (projection + graphx). F: the previous frame's total work (everything but the wait)
 static void drawHud(uint8_t fps, uint24_t draw_cycles, uint24_t frame_cycles) {
 
-    fontlib_SetTransparency(true);
-    fontlib_SetForegroundColor(GFX_BLACK);
     fontlib_SetCursorPosition(3,3);
     fontlib_DrawUInt(fps, 2);
 
@@ -616,8 +688,9 @@ int main(void)
     init_screen();
     
     // prep 3d environment
+    initGridDist();
     setupCamera();
-    sortCoordinateList(coordinates, LEN(coordinates));
+    sortScene();
     preRenderScreen();
 
     // both fields of both buffers start as background: the first frames only draw one field each
@@ -662,13 +735,20 @@ int main(void)
             fps = frame_count;
             frame_count = 0;
             start_time = now;
-
-            // sort objects
-            sortCoordinateList(coordinates, LEN(coordinates));
         }
 
         handleInput(dt);
         setupCamera();
+
+        // painter's order: only changes when the camera enters another cell
+        if (sceneOrderStale()) {
+            sortScene();
+        }
+
+        // cull and project before the wait: it only reads the camera, not the buffer on screen
+        const uint24_t project_start = CYCLES();
+        projectScene();
+        const uint24_t project_cycles = CYCLES() - project_start;
 
         // this eliminates flickering. Idle time, so it is left out of the frame time
         uint24_t wait_cycles = CYCLES();
@@ -680,20 +760,10 @@ int main(void)
 
         const uint24_t draw_start = CYCLES();
 
-        DBG_TIMER_START();
+        drawScene();
 
-        // draw scene
-        for (uint8_t i = 0; i < LEN(coordinates); i++) {
-            gfx_SetColor(coordinates[i][3]);
-
-            drawBox(coordinates[i][0], coordinates[i][1], coordinates[i][2]);
-        }
-
-        // scene draw time: projectBox + graphx
-        const uint24_t draw_cycles = CYCLES() - draw_start;
-
-        DBG_LAP("scene draw");
-        dbg_printf("\n");
+        // scene time: projectScene (before the wait) + graphx
+        const uint24_t draw_cycles = CYCLES() - draw_start + project_cycles;
 
         // FPS and timings ("make hud" builds only)
         drawHud(fps, draw_cycles, frame_cycles);

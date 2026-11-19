@@ -20,7 +20,7 @@
 #define FAR_PLANE    TABLE_FAR_PLANE     // ... or with a corner at or beyond this
 #define GRID_RANGE   TABLE_RENDER_DIST   // per-frame tables cover grid lines +-GRID_RANGE from the camera cell
 
-// projectBox() results. box_out holds the screen coordinates:
+// projectBox() results. Its out[BOX_OUT_LEN] holds the screen coordinates:
 //   AXIS: nl nr nt nb fl fr ft fb  (near and far face rectangles: left right top bottom)
 //   GEN:  sx[4] st[4] sb[4]        (the 4 vertical edges: x, top y, bottom y). corner k is
 //                                  0 = (X-1, Z-1), 1 = (X, Z-1), 2 = (X-1, Z), 3 = (X, Z)
@@ -29,6 +29,7 @@
 #define BOX_AXIS_CLIP     2   // facing N/E/S/W, partly inside
 #define BOX_GEN_NOCLIP    3   // any other yaw, all 8 vertices inside
 #define BOX_GEN_CLIP      4   // any other yaw, may be partly or (rarely) not at all inside
+#define BOX_OUT_LEN       12
 
 #ifndef __ASSEMBLER__
 #include <stdint.h>
@@ -36,6 +37,8 @@
 #define GRID_LEN     (2 * GRID_RANGE + 1)
 
 // ---- per-frame camera state: written by setupCamera() in main.c, read by project.S ----
+// The tables and biases are defined in main.c. The scalars from cam_cos3 on are defined in
+// project.S, next to its locals, so it can address them all through IX.
 // n = X + cam_bias_x is the table index of grid line X-1 (likewise y and z)
 extern int24_t cam_bias_x, cam_bias_y, cam_bias_z;
 // rotX_[2n] = XC, rotX_[2n+1] = XS and rotZ_[2n] = ZS, rotZ_[2n+1] = ZC, where XC/XS is
@@ -55,10 +58,9 @@ extern int24_t cam_kxmin3, cam_kxmax3, cam_kzmin3, cam_kzmax3;
 extern int24_t cam_zlo, cam_zspan, cam_cxl, cam_cxr, cam_cyl;
 extern uint8_t cam_cardinal;                          // exactly facing N/E/S/W: boxes are axis aligned on screen
 
-extern int24_t box_out[12];
-
-// Culls and projects the world voxel [X-1, X] x [Y-1, Y] x [Z-1, Z] into box_out. Returns BOX_*.
-uint8_t projectBox(int24_t X, int24_t Y, int24_t Z);
+// Culls and projects the world voxel [X-1, X] x [Y-1, Y] x [Z-1, Z] into out[BOX_OUT_LEN].
+// Returns BOX_*. For BOX_SKIP, out is partly written or untouched.
+uint8_t projectBox(int24_t X, int24_t Y, int24_t Z, int24_t *out);
 #endif
 
 #endif

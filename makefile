@@ -7,7 +7,7 @@ NAME = DEMOPRGM
 DESCRIPTION = "A Fast Wireframe Engine for the TI84+ CE"
 COMPRESSED = YES
 
-COMPRESSED_MODE = zx7
+COMPRESSED_MODE = zx0
 ARCHIVED = NO
 
 CFLAGS = -Wall -Wextra -O3 -ffast-math

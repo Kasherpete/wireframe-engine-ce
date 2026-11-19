@@ -6,9 +6,10 @@ its `graphx`, `keypadc` and `fontlibc` libraries.
 
 | File | Contents |
 |---|---|
-| `src/main.c` | display setup, buffers, input and movement, per-frame camera setup, `drawBox` (graphx calls), main loop |
+| `src/main.c` | display setup, buffers, input and movement, per-frame camera setup, `projectScene` / `drawScene` / `drawBox` (graphx calls), main loop |
 | `src/project.S` | `projectBox`: per-box culling, projection and clip classification, hand-written assembly |
 | `src/deinterlace.S` | `deinterlaceRows`: the per-frame de-interlace copy (one `ldir` per row) |
+| `src/sort.S` | `sortRecords`: the painter's sort of the scene (see Painter's order), and `gridDist` |
 | `src/engine.h` | constants and per-frame camera state shared by `main.c` and `project.S` |
 | `src/projection_tables.{h,c}` | **generated** by `utils/gen_tables.py`; don't edit |
 
@@ -159,25 +160,32 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 ## Frame pipeline (`main`)
 
 1. Measure the frame time `dt` with `clock()` (32768 ticks/s, clamped to 1/8 s). Every second:
-   update FPS and re-sort objects (`sortCoordinateList`, painter's order in world space: far z
-   first. That's wrong once the camera turns, but wireframe doesn't care; fix it for filling).
+   update FPS.
 2. `handleInput(dt)` → `updateMotion()`: arrow keys set target speeds, see Movement. `main` puts
    the keypad in continuous scan mode (`MODE_3_CONTINUOUS`, restored on exit), so `kb_Data` is
    always current and the loop never calls `kb_Scan()`: that waits for a full scan, about 62k
    cycles (1.3 ms).
-3. `setupCamera()` builds the per-frame camera state (below).
-4. `waitForBufferScan()` busy-waits for the LCD's "next base update" flag (`lcd_IntStatus` bit
-   2, which `swapBuffer` clears), so the previous swap has taken effect and the back buffer is
+3. `setupCamera()` builds the per-frame camera state (below). If the camera is in another grid
+   cell than the scene was sorted for, `sortScene()` re-sorts `coordinates[]` (see Painter's order).
+4. `projectScene()` culls and projects every object (`projectBox`) into `projected[]`, keeping
+   only the boxes that aren't `BOX_SKIP`, with their colour, in scene order (so far to near).
+   It touches no frame buffer, so it runs before the wait, in time that would otherwise be spent
+   idle. Anything else that doesn't touch the back buffer belongs here too.
+5. `waitForBufferScan()` busy-waits for the LCD's "next base update" flag (`lcd_IntStatus` bit
+   2, which `swapBuffer` clears right after writing the new base), so the previous swap has taken effect and the back buffer is
    no longer on screen. This removes flicker and is why FPS is quantized.
    - Don't go back to polling `lcd_UpBaseCurr` until it stops changing. That also stops while
      the LCD is idle between frames, so any frame under about 5 ms swapped twice per refresh and
      drew into the buffer still on screen.
-5. Blit the background (about 159k cycles at full width, see the comment on
-   `blitPrerenderScreen`), then `drawBox(X, Y, Z)` every object in the current gfx colour.
-6. `make hud` builds only (about 60k cycles): draw the HUD with fontlib: FPS, `D` (this frame's scene draw, i.e. `projectBox` + graphx) and
-   `F` (the previous frame's total work, excluding `waitForBufferScan`) in ms, and the buffer
-   number. Timer 2 is free-running; `CYCLES()` reads it and differences are valid up to 349 ms.
-7. Progressive frames only: `deInterlaceViewportBuffer`. Then `swapBuffer`.
+   - `swapBuffer` must write `lcd_UpBase` before acknowledging the flag. The other way round, a
+     refresh in between sets the flag for the old base and the next frame draws into the
+     buffer still on screen.
+6. Blit the background (about 159k cycles at full width, see the comment on
+   `blitPrerenderScreen`), then `drawScene()`: `drawBox` for each entry of `projected[]`.
+7. `make hud` builds only (about 60k cycles): draw the HUD with fontlib: FPS, `D` (this frame's
+   scene: `projectScene` before the wait plus the graphx drawing after it) and `F` (the previous
+   frame's total work, excluding `waitForBufferScan`) in ms. Timer 2 is free-running; `CYCLES()` reads it and differences are valid up to 349 ms.
+8. Progressive frames only: `deInterlaceViewportBuffer`. Then `swapBuffer`.
 
 ## Movement
 
@@ -213,6 +221,14 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 - **Projection, per box** (`projectBox` in `project.S`): table lookups only.
   `64 * a / z = expTable[logTable[|a|] − logTable[z] − EXP_TABLE_MIN]`. logTable entries are
   ×3 too, so the difference of two entries is a byte offset into expTable.
+  - Registers: after the table lookups IX points at `.Lvars`. Only once a box survives culling
+    is `out` read from the stack into IY, so culled boxes don't pay for it. `.Lvars` holds
+    the locals and the per-frame camera scalars (`cam_cos3` … `cam_cardinal`, defined in
+    `project.S`, written by `setupCamera`), addressed as `(ix + V_*)`: 3 bytes per access
+    against 4–5 for an absolute address. The `V_*` offsets are `#define`s, because the
+    assembler won't take a later label difference as a displacement. `.if` checks at the end of
+    the file make the assembly fail if they stop matching the labels, or the block grows past
+    128 bytes. The grid biases and tables stay in `main.c`, read before IX is set.
 - **Culling** happens in camera space before projecting: any corner nearer than `NEAR_PLANE`
   (0.5 units) or at/beyond `FAR_PLANE` (24 units), or the whole box left/right of
   `|x| ≤ 1.25 z` (tested as 4x against 5z, so no division), or above/below `|y| ≤ z` (a little
@@ -235,7 +251,8 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 
 - `projectBox` returns `BOX_SKIP`, `BOX_AXIS_NOCLIP/CLIP` (exactly facing N/E/S/W: near and far
   faces are rectangles, drawn as 2 `gfx_Rectangle` + 4 lines) or `BOX_GEN_NOCLIP/CLIP` (any other
-  yaw: 4 `gfx_VertLine` + 8 lines). `box_out` holds the coordinates (layout in `engine.h`).
+  yaw: 4 `gfx_VertLine` + 8 lines). Its `out` argument (`BOX_OUT_LEN` entries, a `projected[]` slot) receives the coordinates
+  (layout in `engine.h`).
 - A `*_NOCLIP` result must be proven against **all** 8 vertices before any `_NoClip` call.
   - Axis case: each far vertex lies between the screen centre and its near vertex, and the
     centre is inside the viewport. So the near face being inside proves the whole box is, and
@@ -246,6 +263,42 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 - `_NoClip` graphx functions take `uint8_t` y and `uint24_t` lengths: negatives wrap to huge
   values. Clipped versions take `int`.
 
+## Painter's order
+
+- Boxes are drawn far to near by **Manhattan distance in grid cells** from the camera's cell,
+  `|dx| + |dy| + |dz|`. For unit voxels this is an exact painter's order: if A hides part of B,
+  the sight line to B passes through A, every coordinate is monotonic along it, so on each axis
+  A's cell lies between the camera's and B's, and A's distance is strictly smaller. Equal keys
+  never occlude each other. Camera depth (z) is *not* a valid key: two boxes side by side at
+  the same depth can overlap on screen.
+- **The key depends only on the camera's cell**, not on yaw or the position inside the cell. So
+  `main` re-sorts only when the cell changes (`sceneOrderStale()`: the `cam_bias_*` differ from
+  the ones `sortScene` last used), never while standing still or turning, and the order is never
+  stale. Walking crosses about 4 cells per second (up to 6 diagonally).
+- `sortScene()` reorders `coordinates[]` itself, so `projectScene` keeps boxes already sorted and
+  frames without a re-sort pay nothing. It calls `sortRecords` (`sort.S`): a stable counting sort
+  (keys 0 … 3·`GRID_RANGE`) through a scratch copy, in three passes (key and count, prefix,
+  place) plus an `ldir` back.
+  - `gridDist`, the counts and the per-key start pointers each begin on a 256-byte boundary
+    (`.balign 256` in `sort.S`'s bss), so `ld e,a` / `ld l,a` / `ld ixl,a` index them with no add.
+    The tables take 731 bytes of bss.
+  - **Self-modifying code:** the three bias bytes and the running maximum key are patched into
+    `add a,n` / `cp a,n` immediates, which frees registers for `djnz`. This works because
+    programs run from RAM (graphx does the same).
+  - The prefix pass only visits keys max … 0, touches only the count of an empty key, and zeroes
+    each used count as it reads it: the counts must be zero on entry, and are on exit.
+  - Key per axis: `gridDist[(uint8_t)(X + cam_bias_x)]`, a 256-entry table. For every box
+    `projectBox` keeps, the grid index is in [0, 48), so its low byte is exact; a culled box may
+    get a wrapped key, which doesn't matter. That makes the key three 8-bit adds and lookups.
+    Range-checking the 24-bit index instead made the sort ~35% slower.
+- Cost per sort: 5.3k cycles for the 7-box scene, 59k for 120 boxes (about 470 per box). The
+  same sort in C took 7.9k and 127k; the old once-a-second `qsort` (world-space comparator with
+  `abs` calls) took 41k–48k and 1.1M–1.8M.
+- An earlier version sorted the kept boxes every frame (key computed in `projectBox`, bucket
+  lists walked in asm): 19k cycles per frame for 36 kept boxes, about 1.1M per second at 60 FPS.
+  Sorting on cell change costs nothing standing still and about 0.24–0.35M per second walking
+  through the 120-box scene, as one ~1.2 ms spike on each crossing frame.
+
 ## eZ80 performance notes
 
 Measured in CEmu with the CPU-cycle timer:
@@ -254,7 +307,8 @@ Measured in CEmu with the CPU-cycle timer:
   included. Shorter instructions win. A 3-byte absolute address or immediate
   (`ld hl, (nn)` = 7 bytes moved) costs about twice a `push`/`pop` or `(ix + d)` access.
   `call`/`ret` moves 8 bytes.
-- **clang never emits the hardware `mlt` (8×8→16) instruction.** Library-call costs, in cycles:
+- **clang almost never emits the hardware `mlt` (8×8→16) instruction** (seen once, for an 8-bit
+  divide by 3 as a multiply by 0xAB). Library-call costs, in cycles:
 
   | Operation | Cycles |
   |---|---|
@@ -308,7 +362,6 @@ Measured in CEmu with the CPU-cycle timer:
   expire.
 - Open issues on `rewrite`:
   - no filled boxes yet
-  - painter's sort is in world space
   - boxes vanish instead of clipping at the near plane
   - no ground
   - scene coordinates are `int8_t`
