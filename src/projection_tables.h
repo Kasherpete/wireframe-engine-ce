@@ -4,12 +4,15 @@
 
 #define TABLE_SUBUNITS      128
 #define TABLE_FOCAL_LENGTH  64
+#define TABLE_VIEW_HALF_WIDTH 80
+#define TABLE_CULL_X_NUM    5
+#define TABLE_CULL_X_DEN    4
 #define TABLE_RENDER_DIST   24
 #define TABLE_NEAR_PLANE    64
 #define TABLE_FAR_PLANE     3072
-#define LOG_TABLE_LEN       3328
+#define LOG_TABLE_LEN       4021
 #define EXP_TABLE_MIN       -3266
-#define EXP_TABLE_LEN       3970
+#define EXP_TABLE_LEN       4019
 #define SIN_TABLE_LEN       256
 
 #ifndef __ASSEMBLER__

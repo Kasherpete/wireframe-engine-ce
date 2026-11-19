@@ -14,7 +14,7 @@
 #include "engine.h"
 
 
-#define SCREEN_OFFSET ((LCD_WIDTH - 128 * 2) / 4)  // screen x offset
+#define SCREEN_OFFSET ((GFX_LCD_WIDTH - VIEWPORT_LENGTH) / 2)  // first viewport column (0: full width)
 #define draw_buffer_ctrl lcd_LpBase
 #define screen_buffer_ctrl lcd_UpBase
 
@@ -40,7 +40,7 @@
 #define GFX_WIDTH_HALF  80
 #define GFX_LCD_WIDTH 160
 #define GFX_LCD_HEIGHT 120
-#define VIEWPORT_LENGTH 128
+#define VIEWPORT_LENGTH 160
 
 #define NO_CLIP      0
 #define CLIP         1
@@ -104,16 +104,15 @@ static uint8_t  snapping   = 0;   // easing into the nearest N/E/S/W
 static int24_t  cam_cell_x;       // grid cell the camera is in, set by setupCamera() (for the sort)
 
 
+// PL111 "next base update" interrupt flag: set when the LCD loads lcd_UpBase at the start of a
+// frame. swapBuffer clears it, so once it is set again the new frame is on screen and the old one
+// is free to draw into (the same flag gfx_SwapDraw/gfx_Wait use). Polling lcd_UpBaseCurr for "stopped
+// changing" returned early whenever a frame took less than the LCD idle period (about 5 ms), giving
+// two swaps per refresh and drawing into the buffer still on screen.
+#define LCD_INT_LNBU (1 << 2)
+
 void waitForBufferScan(void) {
-
-    volatile uint24_t n = lcd_UpBaseCurr;
-
-    usleep(1);
-
-    while (n != lcd_UpBaseCurr) {
-
-        n = lcd_UpBaseCurr;
-        usleep(1);
+    while (!(lcd_IntStatus & LCD_INT_LNBU)) {
     }
 }
 
@@ -128,7 +127,7 @@ static void deInterlaceFullBuffer(uint24_t buffer) {
 }
 
 
-// only the viewport columns of the frame at buffer: the side bars are never redrawn
+// only the viewport columns of the frame at buffer: side bars (if SCREEN_OFFSET > 0) are never redrawn
 static void deInterlaceViewportBuffer(uint24_t buffer) {
     deinterlaceRows((uint8_t *)buffer + SCREEN_OFFSET, VIEWPORT_LENGTH);
 }
@@ -144,16 +143,35 @@ void setScreenBuffer(uint24_t buffer) {
 }
 
 
+// Interlaced fields: instead of copying every drawn LCD row to the row below (deInterlace*, about
+// 119k cycles per frame), each frame draws only one field of the back buffer. Pointing the draw
+// base 160 bytes into a frame makes graphx row y land on LCD row 2y+1 (the odd field) instead of
+// 2y, and the frame's last byte is still graphx row 119, x 159, so nothing spills.
+// Order: 0 = buffer 1 even, 1 = buffer 2 even, 2 = buffer 1 odd, 3 = buffer 2 odd. Each buffer is
+// drawn every other frame, so its other field is 2 frames old: still images are exact, motion
+// shows both positions on alternate rows (combing).
+//
+// interlace_setting switches this at runtime: 1 = interlaced, 0 = progressive (draw the even field
+// and de-interlace it every frame, the old way: no motion blur, about 119k cycles more). It may be
+// changed at any time; swapBuffer latches it into frame_interlaced, so a frame is never drawn in
+// one mode and finished in the other (de-interlacing a frame drawn into the odd field would copy
+// past the end of the buffer).
+uint8_t interlace_setting = 1;
+static uint8_t frame_interlaced = 1;   // mode of the frame being drawn
+static uint8_t field_phase = 0;
+
+static uint24_t phaseBuffer(uint8_t phase) {
+    return (phase & 1) ? BUFFER_2 : BUFFER_1;
+}
+
 void swapBuffer() {
 
-    // swap roles of the buffers
-    if (draw_buffer_ctrl == BUFFER_1) {
-        setDrawBuffer(BUFFER_2);
-        setScreenBuffer(BUFFER_1);
-    } else {
-        setDrawBuffer(BUFFER_1);
-        setScreenBuffer(BUFFER_2);
-    }
+    // show the frame just drawn, then set up the next frame in the other buffer
+    lcd_IntAcknowledge = LCD_INT_LNBU;
+    setScreenBuffer(phaseBuffer(field_phase));
+    field_phase = (field_phase + 1) & 3;
+    frame_interlaced = interlace_setting;
+    setDrawBuffer(phaseBuffer(field_phase) + ((frame_interlaced && (field_phase & 2)) ? LCD_WIDTH / 2 : 0));
 
 }
 
@@ -191,7 +209,7 @@ static void sortCoordinateList(int8_t coordinates[][COORDINATE_LIST_LENGTH], siz
 
 #define MAX_DT  (CLOCKS_PER_SEC / 8)  // clamp frame time so a stall does not teleport the player
 
-_Static_assert(TABLE_FOCAL_LENGTH * 2 == VIEWPORT_LENGTH, "culling assumes |x| <= z is the horizontal view (90 deg FOV)");
+_Static_assert(TABLE_VIEW_HALF_WIDTH * 2 == VIEWPORT_LENGTH, "gen_tables.py culls for a different viewport width");
 _Static_assert(SIN_TABLE_LEN == 256, "yaw is looked up as a byte");
 _Static_assert(SCREEN_OFFSET == VIEW_X0 && SCREEN_OFFSET + VIEWPORT_LENGTH == VIEW_X1, "engine.h viewport out of sync");
 _Static_assert(GFX_LCD_HEIGHT == VIEW_H && GFX_WIDTH_HALF == CENTRE_X && GFX_HEIGHT_HALF == CENTRE_Y, "engine.h screen out of sync");
@@ -258,8 +276,8 @@ static void setupCamera(void) {
     // culling constants, see engine.h
     cam_zlo   = 3 * NEAR_PLANE - cam_kzmin3;
     cam_zspan = (3 * FAR_PLANE - cam_kzmax3) - cam_zlo;
-    cam_cxl   = -(cam_kxmax3 + cam_kzmax3);
-    cam_cxr   = cam_kzmax3 - cam_kxmin3;
+    cam_cxl   = -(4 * cam_kxmax3 + 5 * cam_kzmax3);   // horizontal view is |x| <= 1.25 z (engine.h)
+    cam_cxr   = 5 * cam_kzmax3 - 4 * cam_kxmin3;
     cam_cyl   = -(3 * SUB + cam_kzmax3);
 }
 
@@ -417,30 +435,40 @@ static void updateMotion(uint8_t arrows, uint24_t dt) {
 // kb_Scan() waits for a whole scan, about 62k cycles (1.3 ms) per frame
 static void handleInput(uint24_t dt) {
     updateMotion(kb_Data[7], dt);
+
+    // [mode] toggles interlacing, once per press
+    static uint8_t mode_held = 0;
+    const uint8_t mode_down = kb_Data[1] & kb_Mode;
+    if (mode_down && !mode_held) {
+        interlace_setting = !interlace_setting;
+    }
+    mode_held = mode_down;
 }
 
 
 void preRenderScreen() {
     
     uint24_t current_buffer = draw_buffer_ctrl;
-    setDrawBuffer(DBL_BUF1-16);
+    setDrawBuffer(DBL_BUF1 - SCREEN_OFFSET);
 
-    gfx_SetClipRegion(16, 0, 128+16, GFX_LCD_HEIGHT);
+    gfx_SetClipRegion(SCREEN_OFFSET, 0, SCREEN_OFFSET + VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
 
     // sky. the ground grid will come back once the new projection exists
     gfx_SetColor(GFX_BLUE);
     gfx_FillRectangle_NoClip(SCREEN_OFFSET, 0, VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
 
     setDrawBuffer(current_buffer);
-    gfx_SetClipRegion(SCREEN_OFFSET, 0, SCREEN_OFFSET + 128, GFX_LCD_HEIGHT);
+    gfx_SetClipRegion(SCREEN_OFFSET, 0, SCREEN_OFFSET + VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
 
 }
 
 
-// Performance: this costs about 127k cycles (2.65 ms) per frame, as much as the whole scene draw.
-// memcpy is an ldir, about 8 cycles per byte for these 15,360 bytes, and that is already the
+// Performance: this costs about 159k cycles (3.3 ms) per frame at full width (127k at the old 128
+// columns), more than the whole scene draw. memcpy is an ldir, about 8 cycles per byte for these
+// 19,200 bytes, and that is already the
 // cheapest way to copy on the CE. A copy only pays when the background holds an actual picture:
-// while it is a solid colour (or one colour per row), an asm fill with push measured 58k cycles
+// while it is a solid colour (or one colour per row), an asm fill with push measured 58k cycles at
+// 128 columns
 // (about 3.8 per byte, since it only writes). A background drawn every frame is cheaper still if
 // it replaces this clear instead of being drawn on top of it.
 void blitPrerenderScreen(uint24_t buffer) {
@@ -492,7 +520,7 @@ static void initHud(void) {
 // "<label>12.3ms" at logical (20, y). One divide, so ~2k cycles
 static void drawMs(uint8_t y, const char *label, uint24_t cycles) {
     const uint24_t tenths = cycles / CYCLES_PER_TENTH_MS;
-    fontlib_SetCursorPosition(20, y);
+    fontlib_SetCursorPosition(3, y);
     fontlib_DrawString(label);
     fontlib_DrawUInt(tenths / 10, 1);
     fontlib_DrawGlyph('.');
@@ -506,17 +534,17 @@ static void drawHud(uint8_t fps, uint24_t draw_cycles, uint24_t frame_cycles) {
 
     fontlib_SetTransparency(true);
     fontlib_SetForegroundColor(GFX_BLACK);
-    fontlib_SetCursorPosition(20,4);
+    fontlib_SetCursorPosition(3,3);
     fontlib_DrawUInt(fps, 2);
 
-    drawMs(12, "d ", draw_cycles);
-    drawMs(20, "f ", frame_cycles);
+    drawMs(11, "d ", draw_cycles);
+    drawMs(19, "f ", frame_cycles);
 
-    // buffer number, in the left side bar
-    fontlib_SetTransparency(false);
-    fontlib_SetColors(GFX_BLUE, GFX_BLACK);
-    fontlib_SetCursorPosition(3,3);
-    fontlib_DrawUInt(draw_buffer_ctrl == BUFFER_1 ? 1 : 2, 1);
+    // // buffer number, top left (in the side bar when there is one)
+    // fontlib_SetTransparency(false);
+    // fontlib_SetColors(GFX_BLUE, GFX_BLACK);
+    // fontlib_SetCursorPosition(3,3);
+    // fontlib_DrawUInt((field_phase & 1) + 1, 1);
 }
 
 #else
@@ -534,6 +562,16 @@ static void drawHud(uint8_t fps, uint24_t draw_cycles, uint24_t frame_cycles) {
 #endif
 
 
+// the bars beside the viewport, in the current colour. None while the viewport is full width:
+// a 0 wide _NoClip fill at x = 160 would not be safe
+static void fillSideBars(void) {
+#if SCREEN_OFFSET > 0
+    gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+    gfx_FillRectangle_NoClip(SCREEN_OFFSET + VIEWPORT_LENGTH, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+#endif
+}
+
+
 void init_screen() {
 
     // initialize graphx
@@ -541,7 +579,7 @@ void init_screen() {
     
     // set palette
     gfx_SetPalette(mypalette, sizeof mypalette, 0);
-    gfx_SetClipRegion(SCREEN_OFFSET, 0, SCREEN_OFFSET + 128, GFX_LCD_HEIGHT);
+    gfx_SetClipRegion(SCREEN_OFFSET, 0, SCREEN_OFFSET + VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
     lcd_Control = 0x13925; // 4 bpp mode
 
     // set screen display to blank double buffer
@@ -549,21 +587,13 @@ void init_screen() {
 
     // initialize second buffer
     setDrawBuffer(BUFFER_2);
-    gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
-    gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+    fillSideBars();
     deInterlaceFullBuffer(BUFFER_2);
 
     // initialize first buffer
     setDrawBuffer(BUFFER_1);
-    gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
-    gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
+    fillSideBars();
     deInterlaceFullBuffer(BUFFER_1);
-
-    // // initialize first double buffer
-    // setDrawBuffer(DBL_BUF1);
-    // gfx_FillRectangle_NoClip(0, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
-    // gfx_FillRectangle_NoClip(VIEWPORT_LENGTH+SCREEN_OFFSET, 0, SCREEN_OFFSET, GFX_LCD_HEIGHT);
-    // // de-interlacing is not needed, as this is a final rendering stage step
 
     // set screen display back normal
     setScreenBuffer(BUFFER_1);
@@ -589,6 +619,14 @@ int main(void)
     setupCamera();
     sortCoordinateList(coordinates, LEN(coordinates));
     preRenderScreen();
+
+    // both fields of both buffers start as background: the first frames only draw one field each
+    setDrawBuffer(BUFFER_2);
+    blitPrerenderScreen(0);
+    deInterlaceViewportBuffer(BUFFER_2);
+    setDrawBuffer(BUFFER_1);
+    blitPrerenderScreen(0);
+    deInterlaceViewportBuffer(BUFFER_1);
 
     // FPS calculation
     uint8_t frame_count = 0;
@@ -660,10 +698,11 @@ int main(void)
         // FPS and timings ("make hud" builds only)
         drawHud(fps, draw_cycles, frame_cycles);
 
-        // de-interlace viewport
-        deInterlaceViewportBuffer(draw_buffer_ctrl);
+        // progressive frames copy the drawn rows to the rows below. Interlaced ones skip it (see swapBuffer)
+        if (!frame_interlaced) {
+            deInterlaceViewportBuffer(draw_buffer_ctrl);
+        }
 
-        // swap roles of the buffers
         swapBuffer();
 
         frame_cycles = CYCLES() - frame_start - wait_cycles;

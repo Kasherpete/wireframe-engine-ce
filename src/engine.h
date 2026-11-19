@@ -5,9 +5,9 @@
 
 #include "projection_tables.h"
 
-// logical screen (see CLAUDE.md: 160x120 logical pixels, 3D viewport at x 16..143)
-#define VIEW_X0      16    // first viewport column (SCREEN_OFFSET)
-#define VIEW_X1      144   // one past the last viewport column
+// logical screen (see CLAUDE.md: 160x120 logical pixels, the 3D viewport is all of it)
+#define VIEW_X0      0     // first viewport column (SCREEN_OFFSET)
+#define VIEW_X1      160   // one past the last viewport column
 #define VIEW_H       120   // viewport height
 #define CENTRE_X     80
 #define CENTRE_Y     60
@@ -47,8 +47,9 @@ extern int24_t cam_cos3, cam_sin3;
 extern int24_t cam_kxmin3, cam_kxmax3, cam_kzmin3, cam_kzmax3;
 // culling, all x3. With x00/z00 the camera space of corner (X-1, Z-1), a box is kept when
 //   (uint)(z00 - zlo) < zspan    every corner in [NEAR_PLANE, FAR_PLANE)
-//   x00 + z00 >= cxl             not entirely left of the view  (xmax >= -zmax)
-//   x00 - z00 <= cxr             not entirely right of the view (xmin <= zmax)
+//   4 x00 + 5 z00 >= cxl         not entirely left of the view  (xmax >= -1.25 zmax)
+//   4 x00 - 5 z00 <= cxr         not entirely right of the view (xmin <= 1.25 zmax)
+// (the view is |x| <= 1.25 z: 80 px half width at TABLE_FOCAL_LENGTH 64)
 //   yt - z00 <= kzmax3           not entirely below the view    (yt <= zmax)
 //   yt + z00 >= cyl              not entirely above the view    (yb >= -zmax)
 extern int24_t cam_zlo, cam_zspan, cam_cxl, cam_cxr, cam_cyl;

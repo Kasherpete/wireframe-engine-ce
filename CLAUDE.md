@@ -104,20 +104,29 @@ with TFT, BGR and power on). graphx doesn't know this and keeps drawing as if th
   - Only 16 colours exist: `mypalette` in `main.c`, a PICO-8-style palette.
   - The `GFX_*` colour names are approximate. Use the palette comments for the real colour of
     each index.
-- **De-interlacing:** graphx only draws into bytes 0–159 of each row (the top LCD row). After
-  drawing, `deInterlaceViewportBuffer` copies bytes 16–143 of every row to bytes 176–303. That
-  duplicates each LCD row, so every logical pixel becomes a 2×2 block.
-  - `deInterlaceFullBuffer` does the same for the whole 160-byte width.
-  - Both act on the frame at their `buffer` argument, and both call `deinterlaceRows` in
-    `src/deinterlace.S`. That's one `ldir` per row, about 119k cycles for the viewport: `ldir`
-    (about 7.7 cycles per byte) is the cheapest copy on the CE, so only copying fewer rows or
-    bytes would make it faster.
-- **Viewport:** the 3D view is logical x 16–143 (`SCREEN_OFFSET` = 16, `VIEWPORT_LENGTH` =
-  128) by y 0–119, which is LCD pixels 32–287. The clip region is set to exactly that. The
-  side bars are black and hold HUD text: fontlib isn't limited by the clip region.
+- **Fields:** graphx only draws into bytes 0–159 of each graphx row: the even LCD rows. With the
+  draw base set 160 bytes into a frame, the same graphx row y lands on LCD row 2y+1 (the odd
+  field) instead, and graphx row 119 still ends on the frame's last byte.
+- **Interlaced mode (default):** each frame draws only one field of the back buffer, in the order
+  buffer 1 even, buffer 2 even, buffer 1 odd, buffer 2 odd (`swapBuffer`). Nothing is copied.
+  Each buffer is drawn every other frame, so its other field is 2 frames old: still images are
+  exact, and motion shows a slight comb or "motion blur".
+- **Progressive mode:** always draw the even field, then `deInterlaceViewportBuffer` copies it
+  to the odd rows, so every logical pixel becomes a 2×2 block. About 149k cycles more per frame
+  at full width.
+  - `interlace_setting` switches modes at runtime ([mode] key). `swapBuffer` latches it into
+    `frame_interlaced`, so a frame is never drawn in one mode and finished in the other:
+    de-interlacing a frame drawn into the odd field would copy past the end of the buffer.
+  - `deInterlaceFullBuffer` copies the whole 160-byte width. Both functions call
+    `deinterlaceRows` in `src/deinterlace.S`, one `ldir` per row: `ldir` (about 7.7 cycles per
+    byte) is the cheapest copy on the CE.
+- **Viewport:** the 3D view is the whole logical screen, x 0–159 (`SCREEN_OFFSET` = 0,
+  `VIEWPORT_LENGTH` = 160) by y 0–119. The clip region is set to exactly that. With a narrower
+  `VIEWPORT_LENGTH`, `fillSideBars` draws black bars beside it, and `gen_tables.py`'s
+  `VIEW_HALF_WIDTH` (and with it the culling) must change too.
 - **Coordinate spaces:** screen x includes `SCREEN_OFFSET`. Compare x against
   `SCREEN_OFFSET` and `SCREEN_OFFSET + VIEWPORT_LENGTH`, never against `0` and
-  `VIEWPORT_LENGTH`.
+  `VIEWPORT_LENGTH`, even while `SCREEN_OFFSET` is 0.
 
 ## VRAM layout (custom; do not use graphx's own buffer helpers)
 
@@ -132,14 +141,17 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 
 - `draw_buffer_ctrl` is `lcd_LpBase`. graphx draws wherever it points (`gfx_vbuffer` reads
   0xE30014). `screen_buffer_ctrl` is `lcd_UpBase`, the buffer the LCD scans out.
-  `swapBuffer()` swaps BUFFER_1 and BUFFER_2 between those roles.
-- `preRenderScreen()` draws the background once, with the draw base set to `DBL_BUF1 - 16`.
-  That makes logical x = 16 land at offset 0, so the stored rows are 128 bytes of viewport
-  data at a 320-byte stride.
+  `swapBuffer()` swaps BUFFER_1 and BUFFER_2 between those roles (and picks the field, see
+  Display). The draw base may be a buffer + 160, so compare buffers by `field_phase`, not by
+  `draw_buffer_ctrl == BUFFER_1`.
+- `preRenderScreen()` draws the background once, with the draw base set to
+  `DBL_BUF1 - SCREEN_OFFSET`. That makes the first viewport column land at offset 0, so the
+  stored rows are `VIEWPORT_LENGTH` bytes of viewport data at a 320-byte stride.
   - It is only a sky fill for now. The old ground grid used the old projection and was
     removed; a ground drawn with rotation would have to be redrawn every frame.
-- Each frame, `blitPrerenderScreen(0)` memcpys those 120 × 128 bytes into the draw buffer at
-  x = 16.
+- Each frame, `blitPrerenderScreen(0)` memcpys those 120 × 160 bytes into the draw base at
+  `SCREEN_OFFSET`: into whichever field is being drawn. At startup, `main` fills both fields of
+  both buffers with it.
 - Don't use `gfx_SetDrawBuffer`, `gfx_SwapDraw`, `gfx_Blit*`, `gfx_FillScreen` or
   `gfx_ZeroScreen`. They assume 76,800-byte 8bpp buffers at graphx's own addresses: they would
   write across two of these frames, or into the pre-rendered background.
@@ -154,13 +166,18 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
    always current and the loop never calls `kb_Scan()`: that waits for a full scan, about 62k
    cycles (1.3 ms).
 3. `setupCamera()` builds the per-frame camera state (below).
-4. `waitForBufferScan()` busy-waits until `lcd_UpBaseCurr` stops changing, so the previous swap
-   has taken effect. This removes flicker and is why FPS is quantized.
-5. Blit the background (about 127k cycles, see the comment on `blitPrerenderScreen`), then `drawBox(X, Y, Z)` every object in the current gfx colour.
+4. `waitForBufferScan()` busy-waits for the LCD's "next base update" flag (`lcd_IntStatus` bit
+   2, which `swapBuffer` clears), so the previous swap has taken effect and the back buffer is
+   no longer on screen. This removes flicker and is why FPS is quantized.
+   - Don't go back to polling `lcd_UpBaseCurr` until it stops changing. That also stops while
+     the LCD is idle between frames, so any frame under about 5 ms swapped twice per refresh and
+     drew into the buffer still on screen.
+5. Blit the background (about 159k cycles at full width, see the comment on
+   `blitPrerenderScreen`), then `drawBox(X, Y, Z)` every object in the current gfx colour.
 6. `make hud` builds only (about 60k cycles): draw the HUD with fontlib: FPS, `D` (this frame's scene draw, i.e. `projectBox` + graphx) and
    `F` (the previous frame's total work, excluding `waitForBufferScan`) in ms, and the buffer
    number. Timer 2 is free-running; `CYCLES()` reads it and differences are valid up to 349 ms.
-7. Run `deInterlaceViewportBuffer`, then `swapBuffer`.
+7. Progressive frames only: `deInterlaceViewportBuffer`. Then `swapBuffer`.
 
 ## Movement
 
@@ -181,7 +198,8 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 - Camera space: x right, y down (screen y grows downward), z forward. Yaw only, no pitch, so
   vertical world edges stay vertical on screen.
 - A box at world (X, Y, Z) occupies [X-1, X]×[Y-1, Y]×[Z-1, Z].
-- **Perspective is true 1/z** with a 90° horizontal FOV: `screen = centre + 64 * a / z`.
+- **Perspective is true 1/z**: `screen = centre + 64 * a / z`. With the 160 px viewport the
+  horizontal view is |x| ≤ 1.25 z (about 102°) and the vertical one |y| ≤ 0.94 z.
 - **Units:** camera space is in 1/`SUB` (128) world units, and every value shared with
   `project.S` is stored **×3**. An `int24_t` table entry is 3 bytes, so a ×3 value is directly a
   byte offset. Per-frame values must stay exact multiples of 3 (`fillRotTable` builds them
@@ -196,18 +214,22 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
   `64 * a / z = expTable[logTable[|a|] − logTable[z] − EXP_TABLE_MIN]`. logTable entries are
   ×3 too, so the difference of two entries is a byte offset into expTable.
 - **Culling** happens in camera space before projecting: any corner nearer than `NEAR_PLANE`
-  (0.5 units) or at/beyond `FAR_PLANE` (24 units), or the whole box left/right of `|x| ≤ z`, or
-  above/below `|y| ≤ z`. A box straddling the near plane is skipped rather than clipped, so boxes
+  (0.5 units) or at/beyond `FAR_PLANE` (24 units), or the whole box left/right of
+  `|x| ≤ 1.25 z` (tested as 4x against 5z, so no division), or above/below `|y| ≤ z` (a little
+  wider than the view, which is fine). A box straddling the near plane is skipped rather than clipped, so boxes
   vanish when you walk into them.
 - **The culling bounds every table index.** `gen_tables.py` proves (with asserts) that for any
   box passing these exact tests, every logTable/expTable index is in range, so `project.S` has
   no range checks. **If you change the culling, change the generator's proof with it.** The
-  same bound keeps projected coordinates within about ±510, which graphx's clipped routines
+  same bound keeps projected coordinates within about ±570, which graphx's clipped routines
   handle.
+  - The horizontal ratio is `CULL_X_NUM / CULL_X_DEN` in the generator, and must equal
+    `VIEW_HALF_WIDTH / FOCAL_LENGTH`. `project.S` hard-codes 5/4 and `#error`s if they change.
 - **Regenerating tables:** edit the constants at the top of `utils/gen_tables.py`
-  (`SUBUNITS`, `FOCAL_LENGTH`, `RENDER_DIST`, `NEAR_PLANE`, `LOG_STEPS`…) and run
-  `python3 utils/gen_tables.py`. It writes `src/projection_tables.{h,c}` (about 22 KB of tables).
-  `main.c` static-asserts the assumptions it makes, e.g. `FOCAL_LENGTH` is half the viewport.
+  (`SUBUNITS`, `FOCAL_LENGTH`, `VIEW_HALF_WIDTH`, `RENDER_DIST`, `NEAR_PLANE`, `LOG_STEPS`…)
+  and run `python3 utils/gen_tables.py`. It writes `src/projection_tables.{h,c}` (about 25 KB
+  of tables). `main.c` static-asserts the assumptions it makes, e.g. `VIEW_HALF_WIDTH` is half
+  `VIEWPORT_LENGTH`.
 
 ## Clipping conventions
 
@@ -248,6 +270,12 @@ Measured in CEmu with the CPU-cycle timer:
   power of 2.
 - `x < 0 ? -x : x` and `abs()` become `__icmpzero` + `__ineg` calls.
 - Signed compares compile inline (bias by 0x800000, then an unsigned compare).
+- **Compiler bug (ez80-clang 22.1.8):** when a chain of compares is turned into a 0/1 value
+  (`a && b && c` stored in a variable rather than branched on), the backend can emit
+  `sbc a, l` where it means `sbc a, a`, giving a garbage result that depends on whatever `A`
+  held. Seen in a test harness, not in the engine. Write such tests as `if`s, and before
+  trusting a safety check (e.g. one guarding a `_NoClip` call), grep `obj/lto.s` for
+  `sbc\ta, [bcdehl]$`, which should find nothing.
 - **Hot per-object code belongs in assembly** (`src/*.S`). ABI: arguments at `sp+3`, `sp+6`,
   `sp+9` (3 bytes each, even for `char`); 8-bit result in `A`, 24-bit in `HL`. Preserve `IX`;
   `AF BC DE HL IY` may be clobbered. `ld rr,(hl)` and `lea` are available.
@@ -257,8 +285,10 @@ Measured in CEmu with the CPU-cycle timer:
 - Where the time goes now (60-box test scene, facing north): `projectBox` + call overhead is
   about 237k cycles, and graphx drawing about 430k. Drawing dominates. Turned off-axis, the
   figures are about 300k and 640k.
-- Whole frame, 7-box idle scene, `make hud` (`F` 9.7 ms): de-interlace 119k, background blit
-  127k, scene 123k, HUD about 60k, `setupCamera` 23k, everything else about 6k cycles. Copying
+- Whole frame, 7-box idle scene, `make hud`, before interlacing and the full-width viewport
+  (`F` 9.7 ms): de-interlace 119k, background blit 127k, scene 123k, HUD about 60k,
+  `setupCamera` 23k, everything else about 6k cycles. Now, at full width: `F` 8.6 ms
+  interlaced (no de-interlace, blit about 159k, and more of the scene in view). Copying
   memory with `ldir` costs about 8 cycles per byte; a write-only fill with unrolled `push` (SP
   pointed into the buffer, interrupts off) about 3.8.
 - There's no FPU. Don't introduce `float`/`double` at runtime; precompute in Python.

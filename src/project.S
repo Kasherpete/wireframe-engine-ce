@@ -24,6 +24,10 @@
 
 #include "engine.h"
 
+#if TABLE_CULL_X_NUM != 5 || TABLE_CULL_X_DEN != 4
+#error "the horizontal culling below compares 4 x with 5 z"
+#endif
+
 #define EXP_BASE	_expTable - 3 * EXP_TABLE_MIN
 #define OUT(k)		_box_out + 3 * k
 
@@ -193,18 +197,33 @@ _projectBox:
 	sbc	hl, de			; unsigned: carry if every corner is in depth range
 	jp	nc, .Lskip
 
+	; the view is |x| <= 1.25 z (CULL_X_NUM / CULL_X_DEN), so compare 4 x with 5 z
+	ld	(.Lx00), bc
 	lea	hl, iy + 0
-	add	hl, bc
-	ld	de, (_cam_cxl)
-	or	a, a
-	sbc	hl, de			; x00 + z00 - cxl
-	jp	m, .Lskip
-
-	ld	hl, (_cam_cxr)
+	add	hl, hl
+	add	hl, hl
 	lea	de, iy + 0
 	add	hl, de
+	ex	de, hl			; de = 5 z00
+	push	bc
+	pop	hl
+	add	hl, hl
+	add	hl, hl
+	push	hl
+	pop	bc			; bc = 4 x00
+
+	ld	hl, (_cam_cxr)
+	add	hl, de
 	or	a, a
-	sbc	hl, bc			; cxr + z00 - x00
+	sbc	hl, bc			; cxr + 5 z00 - 4 x00
+	jp	m, .Lskip
+
+	push	bc
+	pop	hl
+	add	hl, de
+	ld	de, (_cam_cxl)
+	or	a, a
+	sbc	hl, de			; 4 x00 + 5 z00 - cxl
 	jp	m, .Lskip
 
 	ld	hl, (_cam_kzmax3)
@@ -223,7 +242,6 @@ _projectBox:
 	sbc	hl, de			; yt + z00 - cyl
 	jp	m, .Lskip
 
-	ld	(.Lx00), bc
 	ld	(.Lz00), iy
 
 	; ---- the y logs are shared by every corner ----

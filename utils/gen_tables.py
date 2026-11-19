@@ -7,7 +7,7 @@ The calculator has no FPU and clang never emits the eZ80's hardware multiply, so
 multiply, divide and right shift is a slow library call. Projection is therefore done with
 lookups only:
 
-    64 * a / z  =  expTable[logTable[|a|] - logTable[z] - EXP_TABLE_MIN]
+    FOCAL_LENGTH * a / z  =  expTable[logTable[|a|] - logTable[z] - EXP_TABLE_MIN]
 
 logTable values are stored x3, so the difference of two of them is already a byte offset into
 expTable (int24 entries). project.S also keeps camera coordinates x3, so they are byte offsets
@@ -21,7 +21,11 @@ import math
 import os
 
 SUBUNITS = 128          # camera-space coordinates are in 1/SUBUNITS of a world unit
-FOCAL_LENGTH = 64       # logical px per unit at depth 1 (64 = half the viewport -> 90 deg FOV)
+FOCAL_LENGTH = 64       # logical px per unit at depth 1
+VIEW_HALF_WIDTH = 80    # logical px from the screen centre to the viewport edge (160 px viewport)
+# Horizontal culling keeps |x| <= (CULL_X_NUM / CULL_X_DEN) z, which must be exactly the view:
+# VIEW_HALF_WIDTH / FOCAL_LENGTH (80 / 64 = 1.25, a 102 deg FOV). project.S hard-codes 4 x vs 5 z.
+CULL_X_NUM, CULL_X_DEN = 5, 4
 RENDER_DIST = 24        # far plane, in world units
 NEAR_PLANE = SUBUNITS // 2  # boxes with a corner nearer than this are culled (1/SUBUNITS units)
 LOG_STEPS = 256         # log table resolution: steps per doubling (0.27% per step)
@@ -29,9 +33,6 @@ SIN_STEPS = 256         # yaw angles per full turn
 LOG_ZERO = -300         # logTable[0]: low enough that a = 0 always projects to offset 0
 
 FAR_PLANE = RENDER_DIST * SUBUNITS
-# |coordinate| range the log table must cover: depth up to the far plane, plus the spread of a
-# rotated unit box (< 2 units). main.c's culling guarantees nothing larger is looked up.
-LOG_TABLE_LEN = FAR_PLANE + 2 * SUBUNITS
 
 
 def rnd(v):
@@ -41,23 +42,39 @@ def rnd(v):
 def main():
     sin_table = [rnd(SUBUNITS * math.sin(2 * math.pi * a / SIN_STEPS)) for a in range(SIN_STEPS)]
 
-    log_table = [LOG_ZERO] + [rnd(LOG_STEPS * math.log2(v)) for v in range(1, LOG_TABLE_LEN)]
+    assert VIEW_HALF_WIDTH * CULL_X_DEN == FOCAL_LENGTH * CULL_X_NUM, \
+        "horizontal culling must match the viewport (project.S hard-codes 4 x vs 5 z)"
+
+    # Size the tables so project.S needs no range check: cover every |a| and every log difference
+    # logTable[|a|] - logTable[z] that survives the culling in project.S.
+    #   Every corner has z in [NEAR_PLANE, FAR_PLANE). A box's corners spread by at most `spread` in
+    #   x and in z. With R = CULL_X_NUM / CULL_X_DEN, culling keeps a box only if xmin <= R zmax and
+    #   xmax >= -R zmax (exact: project.S compares CULL_X_DEN x with CULL_X_NUM z), and yt <= zmax and
+    #   yb >= -zmax with yb = yt + SUBUNITS. So any corner has
+    #     |x| <= R zmax + spread      and  zmax <= z + spread  ->  |x| <= R (z + spread) + spread
+    #     |y| <= zmax + SUBUNITS                               ->  |y| <= z + spread + SUBUNITS
+    #   |x| is an integer, so the floor of the bound holds too.
+    spread = max(abs(sin_table[a]) + abs(sin_table[(a + 64) % SIN_STEPS]) for a in range(SIN_STEPS))
+
+    # largest |x| and |y| of any corner of a kept box whose farthest corner is at depth zmax
+    def x_bound(zmax):
+        return CULL_X_NUM * zmax // CULL_X_DEN + spread
+
+    def y_bound(zmax):
+        return zmax + SUBUNITS
+
+    # zmax < FAR_PLANE: the log table must reach the largest |a| of all
+    log_table_len = max(x_bound(FAR_PLANE - 1), y_bound(FAR_PLANE - 1)) + 1
+
+    log_table = [LOG_ZERO] + [rnd(LOG_STEPS * math.log2(v)) for v in range(1, log_table_len)]
     log_table3 = [3 * v for v in log_table]  # stored x3, see the module docstring
 
-    # Size the exp table so main.c needs no range check: cover every log difference
-    # logTable[|a|] - logTable[z] that survives drawBox's culling.
-    #   Every corner has z in [NEAR_PLANE, FAR_PLANE). A box's corners spread by at most `spread` in
-    #   x and in z. Culling keeps a box only if xmin <= zmax and xmax >= -zmax (and the same for y
-    #   with the box height SUBUNITS), so any corner has
-    #     |x| <= zmax + spread           and  zmax <= z + spread  ->  |x| <= z + 2*spread
-    #     |y| <= zmax + SUBUNITS                                   ->  |y| <= z + spread + SUBUNITS
-    spread = max(abs(sin_table[a]) + abs(sin_table[(a + 64) % SIN_STEPS]) for a in range(SIN_STEPS))
-    len_excess = max(spread, SUBUNITS)                     # |a| < FAR_PLANE + len_excess
-    ratio_excess = max(2 * spread, spread + SUBUNITS)      # |a| <= z + ratio_excess
-    assert FAR_PLANE + len_excess <= LOG_TABLE_LEN, "logTable too short for what culling lets through"
+    # per corner at depth z, zmax <= z + spread. That bound can pass the end of the log table
+    # near the far plane, where zmax < FAR_PLANE caps |a| instead, hence the min()
     d_min = min(log_table[0], 0) - log_table[FAR_PLANE - 1]
-    d_max = max(log_table[min(z + ratio_excess, LOG_TABLE_LEN - 1)] - log_table[z]
-                for z in range(NEAR_PLANE, FAR_PLANE))
+    d_max = max(log_table[min(bound(z + spread), log_table_len - 1)] - log_table[z]
+                for z in range(NEAR_PLANE, FAR_PLANE)
+                for bound in (x_bound, y_bound))
     exp_min, exp_max = d_min, d_max + 1
     exp_table = [rnd(FOCAL_LENGTH * 2 ** (d / LOG_STEPS)) for d in range(exp_min, exp_max + 1)]
     assert rnd(FOCAL_LENGTH * 2 ** ((log_table[0] - log_table[NEAR_PLANE]) / LOG_STEPS)) == 0, \
@@ -77,10 +94,13 @@ def main():
 
 #define TABLE_SUBUNITS      {SUBUNITS}
 #define TABLE_FOCAL_LENGTH  {FOCAL_LENGTH}
+#define TABLE_VIEW_HALF_WIDTH {VIEW_HALF_WIDTH}
+#define TABLE_CULL_X_NUM    {CULL_X_NUM}
+#define TABLE_CULL_X_DEN    {CULL_X_DEN}
 #define TABLE_RENDER_DIST   {RENDER_DIST}
 #define TABLE_NEAR_PLANE    {NEAR_PLANE}
 #define TABLE_FAR_PLANE     {FAR_PLANE}
-#define LOG_TABLE_LEN       {LOG_TABLE_LEN}
+#define LOG_TABLE_LEN       {log_table_len}
 #define EXP_TABLE_MIN       {exp_min}
 #define EXP_TABLE_LEN       {len(exp_table)}
 #define SIN_TABLE_LEN       {SIN_STEPS}
@@ -117,7 +137,7 @@ const int24_t expTable[EXP_TABLE_LEN] = {{
     for name, text in (("projection_tables.h", header), ("projection_tables.c", tables)):
         with open(os.path.join(src, name), "w") as f:
             f.write(text)
-    print(f"wrote src/projection_tables.h and .c: log {LOG_TABLE_LEN}, exp {len(exp_table)} "
+    print(f"wrote src/projection_tables.h and .c: log {log_table_len}, exp {len(exp_table)} "
           f"(d {exp_min}..{exp_max}, max offset {exp_table[-1]} px), sin {SIN_STEPS} entries")
 
 
