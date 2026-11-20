@@ -98,13 +98,21 @@ static int8_t coordinates[][5] = {
 // Player state. Position is 16.16 fixed point world units. Yaw is in 1/65536 of an angle step,
 // with 256 steps per turn, so 24 bits are exactly one turn and wrapping is just turning past 360
 // degrees: yaw 0 looks along +z, and increasing yaw turns right, towards +x. Velocities ease towards what the keys ask for (handleInput).
+// The eye is eye_height + jump_height above the ground plane y = 0 (y grows downward), so
+// player_y = -(eye_height + jump_height). There is no collision: the ground is always at y = 0.
+#define STAND_HEIGHT  (3L << 15)      // 1.5 units, in 1/65536 units
+#define CROUCH_HEIGHT (3L << 14)      // 0.75 units
 static int32_t  player_x   = 0;
-static int32_t  player_y   = -(2L << 16);
+static int32_t  player_y   = -STAND_HEIGHT;
 static int32_t  player_z   = 0;
 static uint24_t player_yaw = 0;
 static int24_t  walk_vel   = 0;   // 1/256 units per second, along the view direction
+static int24_t  strafe_vel = 0;   // 1/256 units per second, to the right of the view direction
 static int24_t  turn_vel   = 0;   // 1/256 steps per second
 static uint8_t  snapping   = 0;   // easing into the nearest N/E/S/W
+static int24_t  eye_height = STAND_HEIGHT;  // 1/65536 units: eases between STAND_ and CROUCH_HEIGHT
+static int32_t  jump_height = 0;  // 1/65536 units above standing on the ground, >= 0
+static int24_t  jump_vel   = 0;   // 1/256 units per second, upwards
 
 
 // PL111 "next base update" interrupt flag: set when the LCD loads lcd_UpBase at the start of a
@@ -146,26 +154,9 @@ void setScreenBuffer(uint24_t buffer) {
 }
 
 
-// Interlaced fields: instead of copying every drawn LCD row to the row below (deInterlace*, about
-// 119k cycles per frame), each frame draws only one field of the back buffer. Pointing the draw
-// base 160 bytes into a frame makes graphx row y land on LCD row 2y+1 (the odd field) instead of
-// 2y, and the frame's last byte is still graphx row 119, x 159, so nothing spills.
-// Order: 0 = buffer 1 even, 1 = buffer 2 even, 2 = buffer 1 odd, 3 = buffer 2 odd. Each buffer is
-// drawn every other frame, so its other field is 2 frames old: still images are exact, motion
-// shows both positions on alternate rows (combing).
-//
-// interlace_setting switches this at runtime: 1 = interlaced, 0 = progressive (draw the even field
-// and de-interlace it every frame, the old way: no motion blur, about 119k cycles more). It may be
-// changed at any time; swapBuffer latches it into frame_interlaced, so a frame is never drawn in
-// one mode and finished in the other (de-interlacing a frame drawn into the odd field would copy
-// past the end of the buffer).
-uint8_t interlace_setting = 1;
-static uint8_t frame_interlaced = 1;   // mode of the frame being drawn
-static uint8_t field_phase = 0;
-
-static uint24_t phaseBuffer(uint8_t phase) {
-    return (phase & 1) ? BUFFER_2 : BUFFER_1;
-}
+// Double buffering: each frame is drawn into the even LCD rows of the back buffer, and
+// deInterlaceViewportBuffer copies them to the odd rows, so every logical pixel is a 2x2 block.
+static uint8_t drawing_buffer_2 = 0;   // the frame being drawn: 0 = BUFFER_1, 1 = BUFFER_2
 
 void swapBuffer() {
 
@@ -173,11 +164,10 @@ void swapBuffer() {
     // the acknowledge: the other way round, a refresh in between would set the flag for the old base
     // and waitForBufferScan would return while that frame is still on screen. This way round the
     // worst case is waiting one refresh too many
-    setScreenBuffer(phaseBuffer(field_phase));
+    setScreenBuffer(drawing_buffer_2 ? BUFFER_2 : BUFFER_1);
     lcd_IntAcknowledge = LCD_INT_LNBU;
-    field_phase = (field_phase + 1) & 3;
-    frame_interlaced = interlace_setting;
-    setDrawBuffer(phaseBuffer(field_phase) + ((frame_interlaced && (field_phase & 2)) ? LCD_WIDTH / 2 : 0));
+    drawing_buffer_2 = !drawing_buffer_2;
+    setDrawBuffer(drawing_buffer_2 ? BUFFER_2 : BUFFER_1);
 
 }
 
@@ -467,7 +457,7 @@ static void projectScene(void) {
 // Speeds are per second and scaled by the frame time, so they do not change with FPS.
 // Per-frame code, so the 32-bit maths here does not matter.
 
-#define WALK_SPEED   (4 * 256)        // units/s, in 1/256 units
+#define WALK_SPEED   (4 * 256)        // units/s, in 1/256 units (forwards/backwards and strafing)
 #define WALK_ACCEL   (32 * 256)       // units/s^2: full speed (and a full stop) in 1/8 s
 #define TURN_SPEED   (96 * 256)       // steps/s (96 = 135 deg/s), in 1/256 steps
 #define TURN_ACCEL   (768L * 256)     // steps/s^2: full speed in 1/8 s
@@ -475,8 +465,21 @@ static void projectScene(void) {
 #define SNAP_START   (16 * 256)       // ... once the turn has slowed below 16 steps/s
 #define SNAP_GAIN    10               // snap speed = 10 * remaining angle per second (time constant 0.1 s)
 #define SNAP_DONE    (1L << 13)       // finish exactly once within 1/8 step
+#define JUMP_SPEED   (7 * 256)        // units/s upwards at take-off, in 1/256 units
+#define GRAVITY      (24L * 256)      // units/s^2: a jump peaks about 1 unit up after 0.29 s
+#define CROUCH_SPEED (6L * 256)       // units/s: crouching or standing up takes 1/8 s
 
 _Static_assert((int32_t)MAX_DT * TURN_SPEED < 0x7fffffff / 2, "per-frame turn step overflows");
+
+// what updateMotion is asked to do (handleInput reads the keys)
+#define MOVE_FORWARD     0x01   // [up]
+#define MOVE_BACK        0x02   // [down]
+#define MOVE_LEFT        0x04   // [left]: strafe
+#define MOVE_RIGHT       0x08   // [right]: strafe
+#define MOVE_TURN_LEFT   0x10   // [mode]
+#define MOVE_TURN_RIGHT  0x20   // [del]
+#define MOVE_JUMP        0x40   // [2nd]: held, it jumps again on landing
+#define MOVE_CROUCH      0x80   // [alpha], while held
 
 
 // moves v towards target by at most step
@@ -488,30 +491,65 @@ static int24_t approach(int24_t v, int24_t target, int24_t step) {
 }
 
 
-// arrows is kb_Data[7]: left/right turn, up/down walk along the view direction. dt is in clock ticks
-static void updateMotion(uint8_t arrows, uint24_t dt) {
+// moves the player at vel (1/256 units per second) along the direction angle steps from +z
+static void movePlayer(int24_t vel, uint8_t angle, uint24_t dt) {
+    const int32_t dist = ((int32_t)vel * dt) >> 7;  // 1/65536 units: vel/256 * dt/32768 * 65536
+    player_x += (dist * sinTable[angle]) / SUB;
+    player_z += (dist * sinTable[(uint8_t)(angle + 64)]) / SUB;
+}
 
-    // ---- walking ----
+
+// keys is a set of MOVE_* flags. dt is in clock ticks
+static void updateMotion(uint8_t keys, uint24_t dt) {
+
+    // ---- walking and strafing ----
+    const int24_t walk_step = (int24_t)(((int32_t)WALK_ACCEL * dt) / CLOCKS_PER_SEC);
+
     int24_t walk_target = 0;
-    if (arrows & kb_Up) {
+    if (keys & MOVE_FORWARD) {
         walk_target = WALK_SPEED;
-    } else if (arrows & kb_Down) {
+    } else if (keys & MOVE_BACK) {
         walk_target = -WALK_SPEED;
     }
-    walk_vel = approach(walk_vel, walk_target, (int24_t)(((int32_t)WALK_ACCEL * dt) / CLOCKS_PER_SEC));
+    walk_vel = approach(walk_vel, walk_target, walk_step);
 
-    if (walk_vel != 0) {
-        const uint8_t angle = (uint8_t)(player_yaw >> 16);
-        const int32_t dist = ((int32_t)walk_vel * dt) >> 7;  // 1/65536 units: vel/256 * dt/32768 * 65536
-        player_x += (dist * sinTable[angle]) / SUB;
-        player_z += (dist * sinTable[(uint8_t)(angle + 64)]) / SUB;
+    int24_t strafe_target = 0;
+    if (keys & MOVE_RIGHT) {
+        strafe_target = WALK_SPEED;
+    } else if (keys & MOVE_LEFT) {
+        strafe_target = -WALK_SPEED;
     }
+    strafe_vel = approach(strafe_vel, strafe_target, walk_step);
+
+    const uint8_t angle = (uint8_t)(player_yaw >> 16);
+    if (walk_vel != 0) {
+        movePlayer(walk_vel, angle, dt);
+    }
+    if (strafe_vel != 0) {
+        movePlayer(strafe_vel, (uint8_t)(angle + 64), dt);  // 90 degrees right of the view
+    }
+
+    // ---- jumping and crouching ----
+    if (jump_height == 0 && jump_vel == 0 && (keys & MOVE_JUMP)) {
+        jump_vel = JUMP_SPEED;
+    }
+    if (jump_height != 0 || jump_vel != 0) {
+        jump_height += ((int32_t)jump_vel * dt) >> 7;
+        jump_vel -= (int24_t)((GRAVITY * dt) / CLOCKS_PER_SEC);
+        if (jump_height <= 0) {
+            jump_height = 0;  // landed
+            jump_vel = 0;
+        }
+    }
+    eye_height = approach(eye_height, (keys & MOVE_CROUCH) ? CROUCH_HEIGHT : STAND_HEIGHT,
+                          (int24_t)((CROUCH_SPEED * dt) >> 7));
+    player_y = -(eye_height + jump_height);
 
     // ---- turning ----
     const int24_t turn_step = (int24_t)((TURN_ACCEL * dt) / CLOCKS_PER_SEC);
-    if (arrows & (kb_Left | kb_Right)) {
+    if (keys & (MOVE_TURN_LEFT | MOVE_TURN_RIGHT)) {
         snapping = 0;
-        turn_vel = approach(turn_vel, (arrows & kb_Left) ? -TURN_SPEED : TURN_SPEED, turn_step);
+        turn_vel = approach(turn_vel, (keys & MOVE_TURN_LEFT) ? -TURN_SPEED : TURN_SPEED, turn_step);
     } else {
         // signed distance to the nearest multiple of 64 steps, in 1/65536 steps
         const int32_t off = (int32_t)((player_yaw + (32L << 16)) & ((64L << 16) - 1)) - (32L << 16);
@@ -538,15 +576,18 @@ static void updateMotion(uint8_t arrows, uint24_t dt) {
 // no kb_Scan(): main() puts the keypad in continuous scan mode, so kb_Data is always current.
 // kb_Scan() waits for a whole scan, about 62k cycles (1.3 ms) per frame
 static void handleInput(uint24_t dt) {
-    updateMotion(kb_Data[7], dt);
-
-    // [mode] toggles interlacing, once per press
-    static uint8_t mode_held = 0;
-    const uint8_t mode_down = kb_Data[1] & kb_Mode;
-    if (mode_down && !mode_held) {
-        interlace_setting = !interlace_setting;
-    }
-    mode_held = mode_down;
+    const uint8_t arrows = kb_Data[7];
+    const uint8_t group1 = kb_Data[1];
+    uint8_t keys = 0;
+    if (arrows & kb_Up)          keys |= MOVE_FORWARD;
+    if (arrows & kb_Down)        keys |= MOVE_BACK;
+    if (arrows & kb_Left)        keys |= MOVE_LEFT;
+    if (arrows & kb_Right)       keys |= MOVE_RIGHT;
+    if (group1 & kb_Mode)        keys |= MOVE_TURN_LEFT;
+    if (group1 & kb_Del)         keys |= MOVE_TURN_RIGHT;
+    if (group1 & kb_2nd)         keys |= MOVE_JUMP;
+    if (kb_Data[2] & kb_Alpha)   keys |= MOVE_CROUCH;
+    updateMotion(keys, dt);
 }
 
 
@@ -607,7 +648,7 @@ static void drawHud(uint8_t fps, uint24_t draw_cycles, uint24_t frame_cycles) {
     // fontlib_SetTransparency(false);
     // fontlib_SetColors(GFX_BLUE, GFX_BLACK);
     // fontlib_SetCursorPosition(3,3);
-    // fontlib_DrawUInt((field_phase & 1) + 1, 1);
+    // fontlib_DrawUInt(drawing_buffer_2 + 1, 1);
 }
 
 #else
@@ -648,8 +689,7 @@ void init_screen() {
     // set screen display to blank double buffer
     setScreenBuffer(DBL_BUF2);
 
-    // Both fields of both buffers start as background: the first interlaced frames only draw one
-    // field each. After that every frame rewrites every viewport pixel of its field (fill.S)
+    // Both buffers start as background (every frame rewrites every viewport pixel, fill.S)
     memset((void *)BUFFER_1, SKY_COLOUR, 2 * (BUFFER_2 - BUFFER_1));
 
     // initialize second buffer
@@ -756,10 +796,8 @@ int main(void)
         // FPS and timings ("make hud" builds only)
         drawHud(fps, draw_cycles, frame_cycles);
 
-        // progressive frames copy the drawn rows to the rows below. Interlaced ones skip it (see swapBuffer)
-        if (!frame_interlaced) {
-            deInterlaceViewportBuffer(draw_buffer_ctrl);
-        }
+        // copy the drawn rows to the rows below
+        deInterlaceViewportBuffer(draw_buffer_ctrl);
 
         swapBuffer();
 

@@ -75,7 +75,7 @@ SHOTS=6 KEYS='"key|right"' utils/run_cemu.sh bin/DEMOPRGM.8xp /tmp/out
 - Kill CEmu by PID (`pgrep -x cemu`). `pkill -f` patterns can match your own shell.
 - Limitations:
   - Key presses run faster than wall-clock time, so their timing relative to screenshots is
-    loose. `KEYS` can only tap keys, not hold them. The player starts at (0,-2,0) facing +z, so
+    loose. `KEYS` can only tap keys, not hold them. The player starts at (0,-1.5,0) facing +z, so
     take the "idle" shots with no `KEYS`. To test held keys or a specific yaw, call
     `updateMotion()` or set `player_*` directly in a scratch copy.
   - `dbg_printf` output is not captured. To inspect values, draw them on screen with
@@ -116,19 +116,11 @@ with TFT, BGR and power on). graphx doesn't know this and keeps drawing as if th
   - Only 16 colours exist: `mypalette` in `main.c`, a PICO-8-style palette.
   - The `GFX_*` colour names are approximate. Use the palette comments for the real colour of
     each index.
-- **Fields:** graphx only draws into bytes 0–159 of each graphx row: the even LCD rows. With the
-  draw base set 160 bytes into a frame, the same graphx row y lands on LCD row 2y+1 (the odd
-  field) instead, and graphx row 119 still ends on the frame's last byte.
-- **Interlaced mode (default):** each frame draws only one field of the back buffer, in the order
-  buffer 1 even, buffer 2 even, buffer 1 odd, buffer 2 odd (`swapBuffer`). Nothing is copied.
-  Each buffer is drawn every other frame, so its other field is 2 frames old: still images are
-  exact, and motion shows a slight comb or "motion blur".
-- **Progressive mode:** always draw the even field, then `deInterlaceViewportBuffer` copies it
-  to the odd rows, so every logical pixel becomes a 2×2 block. About 149k cycles more per frame
-  at full width.
-  - `interlace_setting` switches modes at runtime ([mode] key). `swapBuffer` latches it into
-    `frame_interlaced`, so a frame is never drawn in one mode and finished in the other:
-    de-interlacing a frame drawn into the odd field would copy past the end of the buffer.
+- **De-interlacing:** graphx only draws into bytes 0–159 of each graphx row: the even LCD rows.
+  Every frame `deInterlaceViewportBuffer` copies them to the odd rows, so every logical pixel
+  becomes a 2×2 block. About 149k cycles per frame at full width.
+  - An interlaced mode (drawing only one field per frame, alternating, with no copy) existed
+    until commit 8f3d1e3. It was faster but combed visibly while moving, so it was removed.
   - `deInterlaceFullBuffer` copies the whole 160-byte width. Both functions call
     `deinterlaceRows` in `src/deinterlace.S`, one `ldir` per row: `ldir` (about 7.7 cycles per
     byte) is the cheapest copy on the CE.
@@ -153,13 +145,11 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 
 - `draw_buffer_ctrl` is `lcd_LpBase`. graphx draws wherever it points (`gfx_vbuffer` reads
   0xE30014). `screen_buffer_ctrl` is `lcd_UpBase`, the buffer the LCD scans out.
-  `swapBuffer()` swaps BUFFER_1 and BUFFER_2 between those roles (and picks the field, see
-  Display). The draw base may be a buffer + 160, so compare buffers by `field_phase`, not by
-  `draw_buffer_ctrl == BUFFER_1`.
+  `swapBuffer()` swaps BUFFER_1 and BUFFER_2 between those roles (`drawing_buffer_2` says
+  which one is being drawn).
 - There is no pre-rendered background any more: `drawSpans` fills it every frame (sky above the
   horizon, ground below; `SKY_COLOUR` / `GROUND_COLOUR` in `engine.h`), and every viewport pixel
-  of the field is rewritten each frame. `init_screen` fills both buffers with the sky colour once,
-  because the first interlaced frames only draw one field each.
+  is rewritten each frame. `init_screen` fills both buffers with the sky colour once.
 - The span list (`DBL_BUF1`, 38,400 bytes) is VRAM nobody displays; reading and writing it costs
   the same as other RAM. Nothing else may use `DBL_BUF1`.
 - Don't use `gfx_SetDrawBuffer`, `gfx_SwapDraw`, `gfx_Blit*`, `gfx_FillScreen` or
@@ -197,16 +187,22 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 7. `make hud` builds only (about 60k cycles): draw the HUD with fontlib: FPS, `D` (this frame's
    scene: projection and rasterization before the wait plus `drawSpans` after it) and `F` (the previous
    frame's total work, excluding `waitForBufferScan`) in ms. Timer 2 is free-running; `CYCLES()` reads it and differences are valid up to 349 ms.
-8. Progressive frames only: `deInterlaceViewportBuffer`. Then `swapBuffer`.
+8. `deInterlaceViewportBuffer`, then `swapBuffer`.
 
 ## Movement
 
 - Position is 16.16 fixed point world units (`int32_t player_x/y/z`). Yaw is `uint24_t` in
   1/65536 of an angle step, with 256 steps per turn, so 2^24 is exactly one turn and wrapping is
   just turning past 360°. Yaw 0 looks along +z; increasing yaw turns right, towards +x.
-- Up/Down walk along the view direction, Left/Right turn. Walking and turning speeds ease
-  towards the target (full speed or a stop in 1/8 s) and are scaled by `dt`, so they don't
-  change with FPS.
+- Controls: Up/Down walk along the view direction, Left/Right strafe, [mode]/[del] turn left/right,
+  [2nd] jumps (held, it jumps again on landing), [alpha] crouches while held. `handleInput` turns
+  the keys into `MOVE_*` flags for `updateMotion(keys, dt)`. Walking, strafing and turning speeds
+  ease towards the target (full speed or a stop in 1/8 s) and are scaled by `dt`, so they don't
+  change with FPS. Walking diagonally is √2 faster (no normalisation).
+- Height: `player_y = -(eye_height + jump_height)`. The ground plane is always y = 0 (there is no
+  collision with the scene). `eye_height` eases between `STAND_HEIGHT` (1.5) and
+  `CROUCH_HEIGHT` (0.75) in 1/8 s; a jump starts at `JUMP_SPEED` (7 units/s) under `GRAVITY`
+  (24 units/s²), peaking about 1 unit up.
 - **Snapping:** when a turn is released within `SNAP_RANGE` (8 steps, 11°) of N/E/S/W and has
   slowed below `SNAP_START`, the yaw eases into it (time constant 0.1 s) and lands on it
   exactly. Exactly cardinal is the fast path (about 30% faster per box), so landing exactly
@@ -422,7 +418,8 @@ Measured in CEmu with the CPU-cycle timer:
 - Whole frame, 7-box idle scene, `make hud`, before interlacing and the full-width viewport
   (`F` 9.7 ms): de-interlace 119k, background blit 127k, scene 123k, HUD about 60k,
   `setupCamera` 23k, everything else about 6k cycles. Now, at full width: `F` 8.6 ms
-  interlaced (no de-interlace, blit about 159k, and more of the scene in view). Copying
+  with the (since removed) interlaced mode (no de-interlace, blit about 159k, and more of the scene
+  in view); 14.6 ms with the de-interlace copy every frame. Copying
   memory with `ldir` costs about 8 cycles per byte; a write-only fill with unrolled `push` (SP
   pointed into the buffer, interrupts off) about 3.8.
 - There's no FPU. Don't introduce `float`/`double` at runtime; precompute in Python.
