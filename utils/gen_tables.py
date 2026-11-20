@@ -80,6 +80,15 @@ def main():
     assert rnd(FOCAL_LENGTH * 2 ** ((log_table[0] - log_table[NEAR_PLANE]) / LOG_STEPS)) == 0, \
         "LOG_ZERO must be low enough that a = 0 projects to 0"
 
+    # Every projected coordinate is within SCREEN_COORD_MAX of the screen centre (the largest
+    # expTable entry), so a screen-space edge spans at most 2 SCREEN_COORD_MAX px in x and in y.
+    # The fill rasterizer (fill.S) turns an edge into a per-column slope S = dy * 256 / dx with
+    # recipTable[dx] = round(2^24 / dx) instead of a division (see fill.S). [0] and [1] are unused
+    coord_max = exp_table[-1]
+    recip_len = 2 * coord_max + 1
+    recip_table = [0, 0] + [rnd(2 ** 24 / dx) for dx in range(2, recip_len)]
+    assert max(recip_table) <= 2 ** 23, "recipTable entries must have a top byte <= 0x80 (fill.S)"
+
     def rows(values, per_line=16):
         return ",\n".join("    " + ", ".join(str(v) for v in values[i:i + per_line])
                           for i in range(0, len(values), per_line))
@@ -104,6 +113,8 @@ def main():
 #define EXP_TABLE_MIN       {exp_min}
 #define EXP_TABLE_LEN       {len(exp_table)}
 #define SIN_TABLE_LEN       {SIN_STEPS}
+#define SCREEN_COORD_MAX    {coord_max}
+#define RECIP_TABLE_LEN     {recip_len}
 
 #ifndef __ASSEMBLER__
 #include <stdint.h>
@@ -115,6 +126,8 @@ extern const int24_t logTable[LOG_TABLE_LEN];
 // round(TABLE_FOCAL_LENGTH * 2^(d / {LOG_STEPS})), d = index + EXP_TABLE_MIN. Covers every d that
 // survives the culling in project.S (proved by the asserts in gen_tables.py): no range check needed
 extern const int24_t expTable[EXP_TABLE_LEN];
+// round(2^24 / dx) for dx = 2 .. 2 SCREEN_COORD_MAX: edge slopes without a division (fill.S)
+extern const uint24_t recipTable[RECIP_TABLE_LEN];
 #endif
 
 #endif
@@ -133,12 +146,16 @@ const int24_t logTable[LOG_TABLE_LEN] = {{
 const int24_t expTable[EXP_TABLE_LEN] = {{
 {rows(exp_table)}
 }};
+
+const uint24_t recipTable[RECIP_TABLE_LEN] = {{
+{rows(recip_table, 10)}
+}};
 """
     for name, text in (("projection_tables.h", header), ("projection_tables.c", tables)):
         with open(os.path.join(src, name), "w") as f:
             f.write(text)
     print(f"wrote src/projection_tables.h and .c: log {log_table_len}, exp {len(exp_table)} "
-          f"(d {exp_min}..{exp_max}, max offset {exp_table[-1]} px), sin {SIN_STEPS} entries")
+          f"(d {exp_min}..{exp_max}, max offset {coord_max} px), sin {SIN_STEPS}, recip {recip_len} entries")
 
 
 if __name__ == "__main__":

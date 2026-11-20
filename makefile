@@ -7,11 +7,16 @@ NAME = DEMOPRGM
 DESCRIPTION = "A Fast Wireframe Engine for the TI84+ CE"
 COMPRESSED = YES
 
-COMPRESSED_MODE = zx0
+COMPRESSED_MODE = zx7
 ARCHIVED = NO
 
 CFLAGS = -Wall -Wextra -O3 -ffast-math
 CXXFLAGS = -Wall -Wextra -O3 -ffast-math
+
+# The eZ80 has no executable-stack concept, so the linker's missing .note.GNU-stack warnings
+# (from CEdev's own crt0.o and libraries) are meaningless here.
+EXTRA_PRE_LDFLAGS = --no-warn-execstack
+EXTRA_LDFLAGS = --no-warn-execstack
 
 # "make hud" (or "make debug hud") adds the on-screen HUD: FPS, timings and the buffer number.
 # Plain "make" leaves it out, along with its per-frame cost (about 1.2 ms of fontlib drawing).

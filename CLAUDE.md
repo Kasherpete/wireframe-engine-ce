@@ -1,16 +1,19 @@
 # CLAUDE.md
 
-A voxel/wireframe 3D renderer for the TI-84 Plus CE (eZ80 CPU at 48 MHz, no FPU, no hardware
+A voxel 3D renderer (filled, shaded faces with hidden surface removal) for the TI-84 Plus CE (eZ80 CPU at 48 MHz, no FPU, no hardware
 divide, 24-bit `int`). It's written in C and eZ80 assembly against the CE toolchain (CEdev) and
 its `graphx`, `keypadc` and `fontlibc` libraries.
 
 | File | Contents |
 |---|---|
-| `src/main.c` | display setup, buffers, input and movement, per-frame camera setup, `projectScene` / `drawScene` / `drawBox` (graphx calls), main loop |
+| `src/main.c` | display setup, buffers, input and movement, per-frame camera setup, the scene, materials, `computeExposure`, `projectScene`, main loop |
 | `src/project.S` | `projectBox`: per-box culling, projection and clip classification, hand-written assembly |
+| `src/fill.S` | `fillScene` / `drawSpans`: the filled rasterizer with hidden surface removal (see Filled rendering) |
+| `src/fill.h` | its interface and span-list constants |
+| `src/fill_ref.c` | the same rasterizer in plain C, compiled only with `-DFILL_REFERENCE`, to verify `fill.S` against |
 | `src/deinterlace.S` | `deinterlaceRows`: the per-frame de-interlace copy (one `ldir` per row) |
 | `src/sort.S` | `sortRecords`: the painter's sort of the scene (see Painter's order), and `gridDist` |
-| `src/engine.h` | constants and per-frame camera state shared by `main.c` and `project.S` |
+| `src/engine.h` | constants and per-frame camera state shared by `main.c`, `project.S` and `fill.S`; the `projected_box_t` layout |
 | `src/projection_tables.{h,c}` | **generated** by `utils/gen_tables.py`; don't edit |
 
 ## Priorities
@@ -18,8 +21,9 @@ its `graphx`, `keypadc` and `fontlibc` libraries.
 - **Performance beats visual quality.** Approximations, lookup tables, coarse resolution and
   small visual artifacts are acceptable if they buy frame rate. Don't trade speed for accuracy
   unless asked.
-- Memory safety still matters. A `_NoClip` draw outside the buffer silently corrupts memory:
-  other frame buffers or the program itself. Speed never justifies an unchecked `_NoClip` call.
+- Memory safety still matters. A write outside the buffer silently corrupts memory: other frame
+  buffers or the program itself. Speed never justifies an unchecked `_NoClip` call, or a span in
+  `fill.S` that isn't inside an open interval (see Filled rendering).
 
 ## Build
 
@@ -38,11 +42,15 @@ make clean
 
 - CEdev v15 is installed at `~/CEdev`. The README says ez80-clang v22+ (nightly) is required.
 - `obj/` and `bin/` are build output (gitignored).
-- Expected warnings: `GFX_LCD_WIDTH`/`GFX_LCD_HEIGHT` macro redefinitions and the linker's `.note.GNU-stack` / executable-stack warnings. Anything else is new.
+- The build should produce no warnings. The `GFX_LCD_WIDTH`/`GFX_LCD_HEIGHT` redefinitions are
+  `#undef`ed first, and the makefile passes `--no-warn-execstack` to the linker (the eZ80 has
+  no executable-stack concept). Any warning is new.
 - `.S` files in `src/` go through the C preprocessor, then the GNU z80 assembler, so they can
   `#include` headers. Keep `;` comments free of apostrophes, and make sure shared `#define`
   values don't start with `(`: the assembler reads `ld de, (x)` as a memory load.
 - After adding or removing a header, `make clean`: stale dependency files otherwise break the build.
+- `fill_ref.c` is empty unless `FILL_REFERENCE` is defined. To verify `fill.S`, build a scratch
+  copy with `CFLAGS += -DFILL_REFERENCE` (see Filled rendering, Verification).
 
 ## Running in CEmu (you can do this yourself)
 
@@ -74,6 +82,9 @@ SHOTS=6 KEYS='"key|right"' utils/run_cemu.sh bin/DEMOPRGM.8xp /tmp/out
     `fontlib_DrawInt` in a scratch copy of the source.
   - The headless `cemu-autotester` only compares CRCs of memory ranges. It can't take
     screenshots.
+- **CEmu runs faster than real time here (about 8×):** the 2 s between screenshots are about 16
+  emulated seconds. To show several camera views, switch them on `clock()` every ~14 s and print
+  the view number on the HUD, rather than counting on screenshot timing.
 - **The FPS counter is quantized to 60/n (60, 30, 20, 15…)** because `waitForBufferScan`
   syncs every frame to the LCD refresh. A real speedup only shows when it crosses one of these
   steps, so compare readings across several screenshots and scenes.
@@ -137,7 +148,7 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 |------------|---------------------|--------------------------------------------------------|
 | `BUFFER_1` | 0xD40000 – 0xD495FF | frame A (draw/display, swapped each frame)             |
 | `BUFFER_2` | 0xD49600 – 0xD52BFF | frame B                                                |
-| `DBL_BUF1` | 0xD52C00 – 0xD5C1FF | pre-rendered background (currently sky only)           |
+| `DBL_BUF1` | 0xD52C00 – 0xD5C1FF | `fill.S`'s span list (`SPAN_LIST` in `fill.h`)         |
 | `DBL_BUF2` | 0xD5C200 – 0xD657FF | blank frame shown during `init_screen` to hide setup   |
 
 - `draw_buffer_ctrl` is `lcd_LpBase`. graphx draws wherever it points (`gfx_vbuffer` reads
@@ -145,17 +156,15 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
   `swapBuffer()` swaps BUFFER_1 and BUFFER_2 between those roles (and picks the field, see
   Display). The draw base may be a buffer + 160, so compare buffers by `field_phase`, not by
   `draw_buffer_ctrl == BUFFER_1`.
-- `preRenderScreen()` draws the background once, with the draw base set to
-  `DBL_BUF1 - SCREEN_OFFSET`. That makes the first viewport column land at offset 0, so the
-  stored rows are `VIEWPORT_LENGTH` bytes of viewport data at a 320-byte stride.
-  - It is only a sky fill for now. The old ground grid used the old projection and was
-    removed; a ground drawn with rotation would have to be redrawn every frame.
-- Each frame, `blitPrerenderScreen(0)` memcpys those 120 × 160 bytes into the draw base at
-  `SCREEN_OFFSET`: into whichever field is being drawn. At startup, `main` fills both fields of
-  both buffers with it.
+- There is no pre-rendered background any more: `drawSpans` fills it every frame (sky above the
+  horizon, ground below; `SKY_COLOUR` / `GROUND_COLOUR` in `engine.h`), and every viewport pixel
+  of the field is rewritten each frame. `init_screen` fills both buffers with the sky colour once,
+  because the first interlaced frames only draw one field each.
+- The span list (`DBL_BUF1`, 38,400 bytes) is VRAM nobody displays; reading and writing it costs
+  the same as other RAM. Nothing else may use `DBL_BUF1`.
 - Don't use `gfx_SetDrawBuffer`, `gfx_SwapDraw`, `gfx_Blit*`, `gfx_FillScreen` or
   `gfx_ZeroScreen`. They assume 76,800-byte 8bpp buffers at graphx's own addresses: they would
-  write across two of these frames, or into the pre-rendered background.
+  write across two of these frames, or into the span list.
 
 ## Frame pipeline (`main`)
 
@@ -167,10 +176,13 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
    cycles (1.3 ms).
 3. `setupCamera()` builds the per-frame camera state (below). If the camera is in another grid
    cell than the scene was sorted for, `sortScene()` re-sorts `coordinates[]` (see Painter's order).
-4. `projectScene()` culls and projects every object (`projectBox`) into `projected[]`, keeping
-   only the boxes that aren't `BOX_SKIP`, with their colour, in scene order (so far to near).
-   It touches no frame buffer, so it runs before the wait, in time that would otherwise be spent
-   idle. Anything else that doesn't touch the back buffer belongs here too.
+4. `projectScene()` works out each box's faces to draw (facing the camera and exposed, see Filled
+   rendering), skips boxes with none, and culls and projects the rest (`projectBox`) into
+   `projected[]`, keeping only the boxes that aren't `BOX_SKIP`, in scene order (far to near).
+   Then `fillScene()` rasterizes them front to back into the span list. Neither touches a frame
+   buffer, so both run before the wait: while the work fits, it overlaps the LCD showing the last
+   frame, and only phase 6 is tied to the refresh. Anything else that doesn't touch the back
+   buffer belongs here too.
 5. `waitForBufferScan()` busy-waits for the LCD's "next base update" flag (`lcd_IntStatus` bit
    2, which `swapBuffer` clears right after writing the new base), so the previous swap has taken effect and the back buffer is
    no longer on screen. This removes flicker and is why FPS is quantized.
@@ -180,10 +192,10 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
    - `swapBuffer` must write `lcd_UpBase` before acknowledging the flag. The other way round, a
      refresh in between sets the flag for the old base and the next frame draws into the
      buffer still on screen.
-6. Blit the background (about 159k cycles at full width, see the comment on
-   `blitPrerenderScreen`), then `drawScene()`: `drawBox` for each entry of `projected[]`.
+6. `drawSpans()`: the background (about 70k cycles, `push` fills row by row; skipped when boxes
+   cover every row), then the spans.
 7. `make hud` builds only (about 60k cycles): draw the HUD with fontlib: FPS, `D` (this frame's
-   scene: `projectScene` before the wait plus the graphx drawing after it) and `F` (the previous
+   scene: projection and rasterization before the wait plus `drawSpans` after it) and `F` (the previous
    frame's total work, excluding `waitForBufferScan`) in ms. Timer 2 is free-running; `CYCLES()` reads it and differences are valid up to 349 ms.
 8. Progressive frames only: `deInterlaceViewportBuffer`. Then `swapBuffer`.
 
@@ -250,9 +262,13 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 ## Clipping conventions
 
 - `projectBox` returns `BOX_SKIP`, `BOX_AXIS_NOCLIP/CLIP` (exactly facing N/E/S/W: near and far
-  faces are rectangles, drawn as 2 `gfx_Rectangle` + 4 lines) or `BOX_GEN_NOCLIP/CLIP` (any other
-  yaw: 4 `gfx_VertLine` + 8 lines). Its `out` argument (`BOX_OUT_LEN` entries, a `projected[]` slot) receives the coordinates
-  (layout in `engine.h`).
+  faces are rectangles, 8 coordinates) or `BOX_GEN_NOCLIP/CLIP` (any other yaw: the 4 vertical
+  edges, 12 coordinates). Its `out` argument (`BOX_OUT_LEN` entries, a `projected[]` slot)
+  receives the coordinates (layout in `engine.h`). `fill.S` turns both layouts into the same 8
+  vertices (`cam_axis_corner` maps the AXIS edges to world corners).
+- `fill.S` clips by construction (spans only inside open intervals, rows clipped to the
+  viewport), so it needs no `_NoClip` guarantee; it only uses `*_NOCLIP` to skip the clamping
+  of edge x values. The rules below still hold for anything drawn with graphx.
 - A `*_NOCLIP` result must be proven against **all** 8 vertices before any `_NoClip` call.
   - Axis case: each far vertex lies between the screen centre and its near vertex, and the
     centre is inside the viewport. So the near face being inside proves the whole box is, and
@@ -265,12 +281,13 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 
 ## Painter's order
 
-- Boxes are drawn far to near by **Manhattan distance in grid cells** from the camera's cell,
+- `coordinates[]` is kept far to near by **Manhattan distance in grid cells** from the camera's cell,
   `|dx| + |dy| + |dz|`. For unit voxels this is an exact painter's order: if A hides part of B,
   the sight line to B passes through A, every coordinate is monotonic along it, so on each axis
   A's cell lies between the camera's and B's, and A's distance is strictly smaller. Equal keys
   never occlude each other. Camera depth (z) is *not* a valid key: two boxes side by side at
-  the same depth can overlap on screen.
+  the same depth can overlap on screen. `fill.S` walks the list backwards, **near to far**: the
+  same relation read the other way round.
 - **The key depends only on the camera's cell**, not on yaw or the position inside the cell. So
   `main` re-sorts only when the cell changes (`sceneOrderStale()`: the `cam_bias_*` differ from
   the ones `sortScene` last used), never while standing still or turning, and the order is never
@@ -278,7 +295,8 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 - `sortScene()` reorders `coordinates[]` itself, so `projectScene` keeps boxes already sorted and
   frames without a re-sort pay nothing. It calls `sortRecords` (`sort.S`): a stable counting sort
   (keys 0 … 3·`GRID_RANGE`) through a scratch copy, in three passes (key and count, prefix,
-  place) plus an `ldir` back.
+  place) plus an `ldir` back. Records are 5 bytes: x, y, z, material, exposed faces
+  (`REC_SIZE` in `sort.S`).
   - `gridDist`, the counts and the per-key start pointers each begin on a 256-byte boundary
     (`.balign 256` in `sort.S`'s bss), so `ld e,a` / `ld l,a` / `ld ixl,a` index them with no add.
     The tables take 731 bytes of bss.
@@ -291,7 +309,8 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
     `projectBox` keeps, the grid index is in [0, 48), so its low byte is exact; a culled box may
     get a wrapped key, which doesn't matter. That makes the key three 8-bit adds and lookups.
     Range-checking the 24-bit index instead made the sort ~35% slower.
-- Cost per sort: 5.3k cycles for the 7-box scene, 59k for 120 boxes (about 470 per box). The
+- Cost per sort (measured with 4-byte records; 5-byte ones copy one byte more per box): 5.3k
+  cycles for the 7-box scene, 59k for 120 boxes (about 470 per box). The
   same sort in C took 7.9k and 127k; the old once-a-second `qsort` (world-space comparator with
   `abs` calls) took 41k–48k and 1.1M–1.8M.
 - An earlier version sorted the kept boxes every frame (key computed in `projectBox`, bucket
@@ -299,14 +318,66 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
   Sorting on cell change costs nothing standing still and about 0.24–0.35M per second walking
   through the 120-box scene, as one ~1.2 ms spike on each crossing frame.
 
+## Filled rendering (`fill.S`)
+
+The file's header comment is the detailed description; this is the map.
+
+- **Front to back with per-row coverage.** Each viewport row keeps a list of x intervals not yet
+  covered (at most `GAP_MAX` = 11, in a 32-byte block per row). Boxes are visited near to far.
+  Each face to draw is a convex quad on screen: per row it covers `[xl, xr)`. Only the parts
+  inside open intervals become spans, and those parts are removed from the intervals. So a
+  hidden pixel is never written, and once every row is closed, farther boxes aren't looked at.
+- **Rows, not columns.** A column version was written first and was about twice as slow on
+  floors: a floor tile is several times wider than tall on screen, and the cost is per line of a
+  face. Tall narrow faces (the tree trunk) are the bad case for rows.
+- **Faces to draw** = facing the camera (sign of box cell − camera cell per axis, three
+  byte-indexed tables in `projectScene`) **and exposed**: not shared with a neighbouring voxel
+  (`computeExposure`, once at startup, stored as the 5th byte of each scene record). A floor then
+  costs one face per voxel instead of three, and an enclosed voxel isn't even projected.
+  Without exposure culling the hidden side faces of floor tiles dominated the cost.
+- **Shading:** `materials[16]` in `main.c` gives each palette colour a top, x-side, z-side and
+  bottom colour byte (the z sides are dithered: the two nibbles of a byte are two LCD pixels).
+  Scene records hold a material index, not a colour byte.
+- **Edges** step x per row with 16 fractional bits; slopes come from `recipTable` (generated by
+  `gen_tables.py`, `round(2^24 / dy)`) and `mlt`, with no division. Shared edges are computed from
+  the same two vertices in the same direction, so faces meet without cracks.
+- **Two phases.** `fillScene` (before the wait) only writes 6-byte span records, with `push` while
+  SP points into the list in `DBL_BUF1`. `drawSpans` (after the wait) fills the background with
+  `push` row by row, then pops the records and jumps into a 256-aligned unrolled `ld (hl),a /
+  inc hl` loop. Both run with interrupts disabled and restore the previous state.
+- **Self-modifying code:** the face colour is patched into the row loop's `ld c, n`, as `sort.S`
+  does with its biases.
+- **Overflow:** a row with more than `GAP_MAX` separate holes drops the rightmost part (it shows
+  the background). A full span list is drawn early (`waitForBufferScan` + `drawSpans`), so the
+  phase split is lost for that frame but nothing breaks.
+- **Memory safety:** spans only ever lie inside open intervals, intervals only shrink from
+  `[0, VIEW_W)`, rows are clipped to `[0, VIEW_H)`. Keep it that way: it is what makes arbitrary
+  projected coordinates safe.
+- **Verification:** `fill_ref.c` is the same algorithm in C and must draw exactly the same frame.
+  A scratch harness built with `-DFILL_REFERENCE` (replace `main()`: for a few hundred
+  pseudo-random camera positions and yaws, a quarter of them exactly cardinal, render the
+  153-box test scene with both into two VRAM frames and count differing bytes) found 0
+  differences in 300 views. A deliberately broken reference was caught (28 of 40 views). Rerun
+  it after changing `fill.S` or `fill_ref.c`, and change both together.
+- **Costs** (cycles, measured): about 2k per face plus about 2k per edge of setup, about 500 per
+  face-row (430 for the usual one-interval row, plus the two edge steps), about 50 per span and
+  10.4 per pixel in `drawSpans`.
+- **If it needs to be faster:**
+  - a `push` path in `drawSpans` for long spans (~3.5 instead of 10.4 cycles per pixel)
+  - edges shared between faces computed once
+  - the per-box face test moved into `projectBox`
+  - long spans checked against the row's interval directly instead of the general loop
+
 ## eZ80 performance notes
 
 Measured in CEmu with the CPU-cycle timer:
 
-- **The CE is memory bound: roughly 2 cycles per byte touched**, opcode and immediate bytes
-  included. Shorter instructions win. A 3-byte absolute address or immediate
-  (`ld hl, (nn)` = 7 bytes moved) costs about twice a `push`/`pop` or `(ix + d)` access.
-  `call`/`ret` moves 8 bytes.
+- **The CE is memory bound: about 4 cycles per byte fetched or read** (opcode and immediate
+  bytes included) **and about 2 per byte written.** Measured on `fill.S`: an unrolled
+  `ld (hl),a / add hl,de` pixel loop costs ~10.4 cycles per pixel, a `push` fill ~3.7 per byte, and
+  whole routines match "count the bytes, times 4" within ~10%. Shorter instructions win: a 4-byte
+  absolute access (`ld a,(nn)`) costs a third more than `ld a,(ix+d)`, and `call`/`ret` moves 8
+  bytes. Estimate a routine by its bytes before writing it.
 - **clang almost never emits the hardware `mlt` (8×8→16) instruction** (seen once, for an 8-bit
   divide by 3 as a multiply by 0xAB). Library-call costs, in cycles:
 
@@ -336,9 +407,18 @@ Measured in CEmu with the CPU-cycle timer:
   - Inline `__asm__` also works (`"+l"` puts a value in HL), but separate `.S` files are easier
     to reason about.
 - Per-frame code can stay in C: a few library calls per frame don't matter.
-- Where the time goes now (60-box test scene, facing north): `projectBox` + call overhead is
-  about 237k cycles, and graphx drawing about 430k. Drawing dominates. Turned off-axis, the
-  figures are about 300k and 640k.
+- Where the time goes with filled rendering (cycles, `make hud`):
+
+  | Scene | projection | `fillScene` | `drawSpans` | `D` |
+  |---|---|---|---|---|
+  | the 7-box tree, start view | 34k | 300k | 106k | 9.2 ms (60 FPS) |
+  | 153-box test scene (11×11 floor, wall, pillar, slab, tree), dense views | 400k–580k | 800k–1.5M | 140k–250k | 28–48 ms |
+  | same, nothing in view | 300k | 12k | 74k | 8 ms |
+
+  On the same 153-box scene and views the old wireframe renderer took `D` 11–38 ms against
+  14–48 ms now, so filling costs about 1.0–1.8× the wireframe. Projection is a large share:
+  `projectBox` + call overhead is about 3.5k cycles per kept box, and the C face test in
+  `projectScene` about 300 per box.
 - Whole frame, 7-box idle scene, `make hud`, before interlacing and the full-width viewport
   (`F` 9.7 ms): de-interlace 119k, background blit 127k, scene 123k, HUD about 60k,
   `setupCamera` 23k, everything else about 6k cycles. Now, at full width: `F` 8.6 ms
@@ -355,13 +435,14 @@ Measured in CEmu with the CPU-cycle timer:
 - Branches:
   - `main`: the old engine (exponential projection, integer movement, no rotation).
   - `debug`: `main` plus per-object `clock()` / `dbg_printf` timing calls.
-  - `rewrite`: this rewrite. Wireframe only so far; filling comes later.
+  - `rewrite`: this rewrite, before filled rendering.
 - `gfx/` holds convimg output for the palette. Only `src/` is compiled; `mypalette` in
   `main.c` is the one that's used.
 - `readme.md` has the TODO list and changelog. Its demo GIF links are Discord CDN URLs that
   expire.
-- Open issues on `rewrite`:
-  - no filled boxes yet
-  - boxes vanish instead of clipping at the near plane
-  - no ground
-  - scene coordinates are `int8_t`
+- Open issues:
+  - boxes vanish instead of clipping at the near plane: with filled faces this shows as a hole
+    in the floor near the bottom of the screen when looking down at it
+  - the ground is a flat colour below the horizon, not geometry
+  - scene coordinates are `int8_t`; exposure is computed once at startup (`computeExposure`), so
+    a scene that changes at runtime must call it again

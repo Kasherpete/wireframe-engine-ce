@@ -14,6 +14,8 @@
 #define EXP_TABLE_MIN       -3266
 #define EXP_TABLE_LEN       4019
 #define SIN_TABLE_LEN       256
+#define SCREEN_COORD_MAX    490
+#define RECIP_TABLE_LEN     981
 
 #ifndef __ASSEMBLER__
 #include <stdint.h>
@@ -25,6 +27,8 @@ extern const int24_t logTable[LOG_TABLE_LEN];
 // round(TABLE_FOCAL_LENGTH * 2^(d / 256)), d = index + EXP_TABLE_MIN. Covers every d that
 // survives the culling in project.S (proved by the asserts in gen_tables.py): no range check needed
 extern const int24_t expTable[EXP_TABLE_LEN];
+// round(2^24 / dx) for dx = 2 .. 2 SCREEN_COORD_MAX: edge slopes without a division (fill.S)
+extern const uint24_t recipTable[RECIP_TABLE_LEN];
 #endif
 
 #endif

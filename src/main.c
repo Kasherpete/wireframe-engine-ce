@@ -12,13 +12,14 @@
 #include <string.h>
 
 #include "engine.h"
+#include "fill.h"
 
 
 #define SCREEN_OFFSET ((GFX_LCD_WIDTH - VIEWPORT_LENGTH) / 2)  // first viewport column (0: full width)
 #define draw_buffer_ctrl lcd_LpBase
 #define screen_buffer_ctrl lcd_UpBase
 
-#define DBL_BUF1 0xd52c00
+#define DBL_BUF1 0xd52c00   // the fill rasterizer's span list (fill.h)
 #define DBL_BUF2 0xD5C200
 #define BUFFER_1 0xD40000
 #define BUFFER_2 0xD49600
@@ -29,11 +30,14 @@
 
 #define GFX_HEIGHT_HALF 60
 #define GFX_WIDTH_HALF  80
+// graphx defines these as 320x240; with the 4bpp trick the logical screen is 160x120.
+#undef GFX_LCD_WIDTH
+#undef GFX_LCD_HEIGHT
 #define GFX_LCD_WIDTH 160
 #define GFX_LCD_HEIGHT 120
 #define VIEWPORT_LENGTH 160
 
-// FOR TESTING ONLY...NOT ACCURATE
+// FOR TESTING ONLY...NOT ACCURATE (scene colours are materials[] now)
 #define GFX_BLACK   0x00
 #define GFX_RED     0x11
 #define GFX_ORANGE  0x22
@@ -66,15 +70,29 @@ unsigned char mypalette[32] =
     0x35, 0x7f, /*  15: rgb(255, 202, 173) */
 };
 
-// the scene: x, y, z of each voxel (it spans [X-1, X] x [Y-1, Y] x [Z-1, Z]) and its colour
-static int8_t coordinates[][4] = {
-        {5, -2, 5, 0x44},
-        {5, -1, 5, 0x44},
-        {5, 0, 5, 0x44},
-        {4, -3, 5, 0x33},
-        {6, -3, 5, 0x33},
-        {5, -3, 4, 0x33},
-        {5, -3, 6, 0x33},
+// Face colours per material: {top, x side, z side, bottom}. Material m is palette colour m lit
+// from above: the top is m, the z sides m dithered with a darker shade (the two nibbles of a
+// byte are two LCD pixels), the x sides the darker shade, the bottom darker still. The darker
+// shades follow the PICO-8 palette's own ramps (8 red -> 2 dark purple -> 1 dark blue, ...).
+#define MAT(m, dark, darker) {(m) * 0x11, (dark) * 0x11, (m) * 0x10 + (dark), (darker) * 0x11}
+const uint8_t materials[MAT_COUNT][4] = {
+    MAT(0, 0, 0),    MAT(1, 0, 0),    MAT(2, 1, 0),    MAT(3, 1, 0),
+    MAT(4, 2, 1),    MAT(5, 1, 0),    MAT(6, 13, 5),   MAT(7, 6, 13),
+    MAT(8, 2, 1),    MAT(9, 4, 2),    MAT(10, 9, 4),   MAT(11, 3, 1),
+    MAT(12, 13, 5),  MAT(13, 5, 1),   MAT(14, 8, 2),   MAT(15, 14, 8),
+};
+
+// the scene: x, y, z of each voxel (it spans [X-1, X] x [Y-1, Y] x [Z-1, Z]) and its material
+// (index into materials[], 0 .. MAT_COUNT - 1). The fifth byte is filled in by computeExposure().
+// If the scene changes at runtime, call computeExposure() again
+static int8_t coordinates[][5] = {
+        {5, -2, 5, 4},
+        {5, -1, 5, 4},
+        {5, 0, 5, 4},
+        {4, -3, 5, 3},
+        {6, -3, 5, 3},
+        {5, -3, 4, 3},
+        {5, -3, 6, 3},
 };
 
 // Player state. Position is 16.16 fixed point world units. Yaw is in 1/65536 of an angle step,
@@ -173,6 +191,9 @@ void swapBuffer() {
 // either way. Camera depth (z) is not a valid key: two boxes side by side at the same depth can
 // overlap on screen.
 //
+// fill.S walks the list backwards, NEAR TO FAR, and keeps track of what is already covered: the
+// same order read the other way round, so a box is only drawn where nothing nearer is.
+//
 // The key only depends on which cell the camera is in, not on its yaw or position inside the cell,
 // so the order only changes when the camera crosses into another cell. main() then calls
 // sortScene(), which reorders coordinates[] itself. projectScene() keeps boxes in list order, so
@@ -203,13 +224,13 @@ static void initGridDist(void) {
 _Static_assert(3 * GRID_RANGE < 256, "distance keys are bytes");
 _Static_assert(LEN(coordinates) <= 255, "sortScene counts and indexes the scene in bytes");
 
-static int8_t  sort_scratch[LEN(coordinates)][4];
+static int8_t  sort_scratch[LEN(coordinates)][5];
 static uint8_t sort_key[LEN(coordinates)];
 static int24_t sorted_bias_x, sorted_bias_y, sorted_bias_z;  // the camera cell coordinates[] is sorted for
 
 // sort.S: sorts the n records far to near for camera biases bx, by, bz (the low bytes of
 // cam_bias_*), through scratch[n] and keys[n]. n must be 1 .. 255
-void sortRecords(int8_t (*rec)[4], int8_t (*scratch)[4], uint8_t *keys, uint8_t n,
+void sortRecords(int8_t (*rec)[5], int8_t (*scratch)[5], uint8_t *keys, uint8_t n,
                  uint8_t bx, uint8_t by, uint8_t bz);
 
 _Static_assert(LEN(coordinates) >= 1, "sortRecords needs at least one record");
@@ -248,6 +269,7 @@ static uint8_t sceneOrderStale(void) {
 
 #define MAX_DT  (CLOCKS_PER_SEC / 8)  // clamp frame time so a stall does not teleport the player
 
+_Static_assert(SPAN_LIST == DBL_BUF1 && SPAN_LIST_END == DBL_BUF2, "fill.h span list is not DBL_BUF1");
 _Static_assert(TABLE_VIEW_HALF_WIDTH * 2 == VIEWPORT_LENGTH, "gen_tables.py culls for a different viewport width");
 _Static_assert(SIN_TABLE_LEN == 256, "yaw is looked up as a byte");
 _Static_assert(SCREEN_OFFSET == VIEW_X0 && SCREEN_OFFSET + VIEWPORT_LENGTH == VIEW_X1, "engine.h viewport out of sync");
@@ -256,6 +278,17 @@ _Static_assert(GFX_LCD_HEIGHT == VIEW_H && GFX_WIDTH_HALF == CENTRE_X && GFX_HEI
 // shared with project.S, see engine.h (the cam_ scalars are defined in project.S)
 int24_t cam_bias_x, cam_bias_y, cam_bias_z;
 int24_t rotX_[2 * GRID_LEN], rotZ_[2 * GRID_LEN], camY_[GRID_LEN];
+uint8_t cam_axis_corner[4];
+
+// cam_axis_corner per cardinal direction (yaw >> 22): the world corner (engine.h) of the near-left,
+// near-right, far-left and far-right edge. E.g. facing +x (yaw 64 steps) the near face is x = X - 1
+// (corners 0 and 2), and +z is to the left
+static const uint8_t axis_corners[4][4] = {
+    {0, 1, 2, 3},   // facing +z
+    {2, 0, 3, 1},   // +x
+    {3, 2, 1, 0},   // -z
+    {1, 3, 0, 2},   // -x
+};
 
 
 // t[n * stride] = 3 * (n - GRID_RANGE - frac/256) * k, by repeated addition. Built unscaled and
@@ -280,6 +313,7 @@ static void setupCamera(void) {
     const int24_t s = sinTable[angle];
     const int24_t c = sinTable[(uint8_t)(angle + 64)];
     cam_cardinal = (player_yaw & 0x3fffff) == 0;  // a multiple of 64 steps, fraction included
+    memcpy(cam_axis_corner, axis_corners[angle >> 6], 4);
 
     // grid cell, and the position within it in 1/256 units
     const int24_t cell_x = (int24_t)(player_x >> 16);
@@ -316,15 +350,87 @@ static void setupCamera(void) {
 }
 
 
-// A box that passed culling, as projectScene() left it for drawScene()
-typedef struct {
-    uint8_t kind;               // BOX_* result of projectBox(), never BOX_SKIP
-    uint8_t colour;
-    int24_t v[BOX_OUT_LEN];     // screen coordinates, layout in engine.h
-} projected_box_t;
+// the layout fill.S reads
+_Static_assert(sizeof(projected_box_t) == PB_SIZE, "engine.h PB_SIZE out of sync");
+_Static_assert(__builtin_offsetof(projected_box_t, kind) == PB_KIND, "engine.h PB_KIND out of sync");
+_Static_assert(__builtin_offsetof(projected_box_t, faces) == PB_FACES, "engine.h PB_FACES out of sync");
+_Static_assert(__builtin_offsetof(projected_box_t, mat) == PB_MAT, "engine.h PB_MAT out of sync");
+_Static_assert(__builtin_offsetof(projected_box_t, v) == PB_V, "engine.h PB_V out of sync");
 
 static projected_box_t projected[LEN(coordinates)];
 static uint8_t num_projected;
+
+
+// Faces that no other voxel covers: a face shared with a neighbouring voxel can never be seen,
+// so projectScene() never hands it to the rasterizer. A floor then costs one face per voxel
+// instead of three. Stored in coordinates[i][4] as FACE_* bits. Every pair once: n^2 / 2 tests,
+// about 40 ms at startup for 255 voxels
+static void computeExposure(void) {
+    for (uint8_t i = 0; i < LEN(coordinates); i++) {
+        coordinates[i][4] = FACE_XP | FACE_XN | FACE_ZP | FACE_ZN | FACE_TOP | FACE_BOT;
+    }
+    for (uint8_t i = 0; i < LEN(coordinates); i++) {
+        int8_t *a = coordinates[i];
+        for (uint8_t j = i + 1; j < LEN(coordinates); j++) {
+            int8_t *b = coordinates[j];
+            const int8_t dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+            // ifs, not a combined test: see the compiler bug in CLAUDE.md
+            if (dy == 0 && dz == 0) {
+                if (dx == 1) {
+                    a[4] &= ~FACE_XP;
+                    b[4] &= ~FACE_XN;
+                } else if (dx == -1) {
+                    a[4] &= ~FACE_XN;
+                    b[4] &= ~FACE_XP;
+                }
+            } else if (dx == 0 && dy == 0) {
+                if (dz == 1) {
+                    a[4] &= ~FACE_ZP;
+                    b[4] &= ~FACE_ZN;
+                } else if (dz == -1) {
+                    a[4] &= ~FACE_ZN;
+                    b[4] &= ~FACE_ZP;
+                }
+            } else if (dx == 0 && dz == 0) {
+                if (dy == -1) {             // b is above a: a's top face is covered
+                    a[4] &= ~FACE_TOP;
+                    b[4] &= ~FACE_BOT;
+                } else if (dy == 1) {
+                    a[4] &= ~FACE_BOT;
+                    b[4] &= ~FACE_TOP;
+                }
+            }
+        }
+    }
+}
+
+
+// The faces of a box that face the camera (FACE_*), from d = box cell - camera cell on each axis:
+// the +x face (at X) faces the camera exactly when the camera is in a cell right of the box's, and
+// so on; d = 0 means the camera is level with the box on that axis, so neither face is visible.
+// With n = X + cam_bias_x (the grid index projectBox uses) d is n - GRID_RANGE, so the bits are
+// tables indexed by the low byte of n: three 8-bit adds and lookups per box. n wraps for boxes
+// beyond GRID_RANGE, which projectBox culls anyway (as in sortRecords). C with int24 compares
+// cost about 1k cycles per box
+static uint8_t face_x[256], face_y[256], face_z[256];
+
+// n >= 2 GRID_RANGE: a box projectBox culls, so no faces (ifs: see the compiler bug in CLAUDE.md)
+static void initFaceTables(void) {
+    uint8_t n = 0;
+    do {
+        if (n < GRID_RANGE) {               // box cell < camera cell
+            face_x[n] = FACE_XP;
+            face_z[n] = FACE_ZP;
+            face_y[n] = FACE_BOT;           // y grows downward: the box is above the camera
+        } else if (n > GRID_RANGE && n < 2 * GRID_RANGE) {
+            face_x[n] = FACE_XN;
+            face_z[n] = FACE_ZN;
+            face_y[n] = FACE_TOP;
+        } else {
+            face_x[n] = face_y[n] = face_z[n] = 0;
+        }
+    } while (++n != 0);
+}
 
 
 // Culls and projects every box into projected[], without drawing. Boxes stay in the order of
@@ -334,105 +440,26 @@ static void projectScene(void) {
 
     projected_box_t *p = projected;
     uint8_t n = 0;
+    const uint8_t bx = (uint8_t)cam_bias_x, by = (uint8_t)cam_bias_y, bz = (uint8_t)cam_bias_z;
     for (uint8_t i = 0; i < LEN(coordinates); i++) {
         const int8_t *c = coordinates[i];
+        // faces both towards the camera and not covered by a neighbour. None: nothing of this
+        // box can show (its silhouette is covered by nearer neighbours), so skip projecting it
+        const uint8_t faces = (face_x[(uint8_t)(c[0] + bx)] | face_y[(uint8_t)(c[1] + by)] |
+                               face_z[(uint8_t)(c[2] + bz)]) & (uint8_t)c[4];
+        if (faces == 0) {
+            continue;
+        }
         const uint8_t kind = projectBox(c[0], c[1], c[2], p->v);
         if (kind != BOX_SKIP) {
             p->kind = kind;
-            p->colour = (uint8_t)c[3];
+            p->faces = faces;
+            p->mat = (uint8_t)c[3];
             p++;
             n++;
         }
     }
     num_projected = n;
-}
-
-
-// Wireframe of one projected box, in the current gfx colour. projectBox() already culled,
-// projected and classified it; this only issues the graphx calls.
-static void drawBox(const projected_box_t *p) {
-
-    const int24_t *b = p->v;
-
-    switch (p->kind) {
-
-    // facing N/E/S/W: near and far faces are screen rectangles. 2 rectangles (fast spans) + 4 lines
-    case BOX_AXIS_NOCLIP: {
-        const int24_t nl = b[0], nr = b[1], nt = b[2], nb = b[3];
-        const int24_t fl = b[4], fr = b[5], ft = b[6], fb = b[7];
-        gfx_Rectangle_NoClip(nl, nt, nr - nl + 1, nb - nt + 1);
-        gfx_Rectangle_NoClip(fl, ft, fr - fl + 1, fb - ft + 1);
-        gfx_Line_NoClip(nl, nt, fl, ft);
-        gfx_Line_NoClip(nr, nt, fr, ft);
-        gfx_Line_NoClip(nl, nb, fl, fb);
-        gfx_Line_NoClip(nr, nb, fr, fb);
-        break;
-    }
-
-    case BOX_AXIS_CLIP: {
-        const int24_t nl = b[0], nr = b[1], nt = b[2], nb = b[3];
-        const int24_t fl = b[4], fr = b[5], ft = b[6], fb = b[7];
-        // the far face is often still fully inside
-        if (fl >= SCREEN_OFFSET && fr < SCREEN_OFFSET + VIEWPORT_LENGTH && ft >= 0 && fb < GFX_LCD_HEIGHT) {
-            gfx_Rectangle_NoClip(fl, ft, fr - fl + 1, fb - ft + 1);
-        } else {
-            gfx_Rectangle(fl, ft, fr - fl + 1, fb - ft + 1);
-        }
-        gfx_Rectangle(nl, nt, nr - nl + 1, nb - nt + 1);
-        gfx_Line(nl, nt, fl, ft);
-        gfx_Line(nr, nt, fr, ft);
-        gfx_Line(nl, nb, fl, fb);
-        gfx_Line(nr, nb, fr, fb);
-        break;
-    }
-
-    // any other yaw: 4 vertical edges (vertical on screen too, since there is only yaw) + 8 lines
-    case BOX_GEN_NOCLIP: {
-        const int24_t *sx = b, *st = b + 4, *sb = b + 8;
-        for (uint8_t k = 0; k < 4; k++) {
-            gfx_VertLine_NoClip(sx[k], st[k], sb[k] - st[k] + 1);
-        }
-        gfx_Line_NoClip(sx[0], st[0], sx[1], st[1]);
-        gfx_Line_NoClip(sx[2], st[2], sx[3], st[3]);
-        gfx_Line_NoClip(sx[0], st[0], sx[2], st[2]);
-        gfx_Line_NoClip(sx[1], st[1], sx[3], st[3]);
-        gfx_Line_NoClip(sx[0], sb[0], sx[1], sb[1]);
-        gfx_Line_NoClip(sx[2], sb[2], sx[3], sb[3]);
-        gfx_Line_NoClip(sx[0], sb[0], sx[2], sb[2]);
-        gfx_Line_NoClip(sx[1], sb[1], sx[3], sb[3]);
-        break;
-    }
-
-    case BOX_GEN_CLIP: {
-        const int24_t *sx = b, *st = b + 4, *sb = b + 8;
-        for (uint8_t k = 0; k < 4; k++) {
-            gfx_VertLine(sx[k], st[k], sb[k] - st[k] + 1);
-        }
-        gfx_Line(sx[0], st[0], sx[1], st[1]);
-        gfx_Line(sx[2], st[2], sx[3], st[3]);
-        gfx_Line(sx[0], st[0], sx[2], st[2]);
-        gfx_Line(sx[1], st[1], sx[3], st[3]);
-        gfx_Line(sx[0], sb[0], sx[1], sb[1]);
-        gfx_Line(sx[2], sb[2], sx[3], sb[3]);
-        gfx_Line(sx[0], sb[0], sx[2], sb[2]);
-        gfx_Line(sx[1], sb[1], sx[3], sb[3]);
-        break;
-    }
-
-    default:  // BOX_SKIP: never stored by projectScene()
-        break;
-    }
-}
-
-
-// draws what projectScene() kept, far to near
-static void drawScene(void) {
-
-    const projected_box_t *p = projected;
-    for (uint8_t n = num_projected; n != 0; n--, p++) {
-        gfx_SetColor(p->colour);
-        drawBox(p);
-    }
 }
 
 
@@ -494,7 +521,7 @@ static void updateMotion(uint8_t arrows, uint24_t dt) {
         }
         if (snapping) {
             if (off < SNAP_DONE && off > -SNAP_DONE) {
-                player_yaw -= off;  // exactly N/E/S/W: drawBox takes the fast path
+                player_yaw -= off;  // exactly N/E/S/W: projectBox takes the fast path
                 turn_vel = 0;
                 snapping = 0;
             } else {
@@ -520,43 +547,6 @@ static void handleInput(uint24_t dt) {
         interlace_setting = !interlace_setting;
     }
     mode_held = mode_down;
-}
-
-
-void preRenderScreen() {
-    
-    uint24_t current_buffer = draw_buffer_ctrl;
-    setDrawBuffer(DBL_BUF1 - SCREEN_OFFSET);
-
-    // sky. the ground grid will come back once the new projection exists
-    gfx_SetColor(GFX_BLUE);
-    gfx_FillRectangle_NoClip(SCREEN_OFFSET, 0, VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
-
-    setDrawBuffer(current_buffer);
-
-}
-
-
-// Performance: this costs about 159k cycles (3.3 ms) per frame at full width (127k at the old 128
-// columns), more than the whole scene draw. memcpy is an ldir, about 8 cycles per byte for these
-// 19,200 bytes, and that is already the
-// cheapest way to copy on the CE. A copy only pays when the background holds an actual picture:
-// while it is a solid colour (or one colour per row), an asm fill with push measured 58k cycles at
-// 128 columns
-// (about 3.8 per byte, since it only writes). A background drawn every frame is cheaper still if
-// it replaces this clear instead of being drawn on top of it.
-void blitPrerenderScreen(uint24_t buffer) {
-
-    const uint8_t *src = (const uint8_t *)((buffer > 1) ? DBL_BUF2 + (buffer - 2) * (LCD_WIDTH / 2)
-                                                        : DBL_BUF1 + buffer * (LCD_WIDTH / 2));
-    uint8_t *dst = (uint8_t *)draw_buffer_ctrl + SCREEN_OFFSET;
-
-    // pointer steps instead of y * LCD_WIDTH, which was a library multiply per row
-    for (uint8_t y = 0; y < LCD_HEIGHT / 2; y++) {
-        memcpy(dst, src, VIEWPORT_LENGTH);
-        dst += LCD_WIDTH;
-        src += LCD_WIDTH;
-    }
 }
 
 
@@ -603,7 +593,8 @@ static void drawMs(uint8_t y, const char *label, uint24_t cycles) {
 }
 
 
-// D: this frame's scene (projection + graphx). F: the previous frame's total work (everything but the wait)
+// D: this frame's scene (projection and rasterization + drawing the spans). F: the previous frame's
+// total work (everything but the wait)
 static void drawHud(uint8_t fps, uint24_t draw_cycles, uint24_t frame_cycles) {
 
     fontlib_SetCursorPosition(3,3);
@@ -657,6 +648,10 @@ void init_screen() {
     // set screen display to blank double buffer
     setScreenBuffer(DBL_BUF2);
 
+    // Both fields of both buffers start as background: the first interlaced frames only draw one
+    // field each. After that every frame rewrites every viewport pixel of its field (fill.S)
+    memset((void *)BUFFER_1, SKY_COLOUR, 2 * (BUFFER_2 - BUFFER_1));
+
     // initialize second buffer
     setDrawBuffer(BUFFER_2);
     fillSideBars();
@@ -688,18 +683,11 @@ int main(void)
     init_screen();
     
     // prep 3d environment
+    computeExposure();
+    initFaceTables();
     initGridDist();
     setupCamera();
     sortScene();
-    preRenderScreen();
-
-    // both fields of both buffers start as background: the first frames only draw one field each
-    setDrawBuffer(BUFFER_2);
-    blitPrerenderScreen(0);
-    deInterlaceViewportBuffer(BUFFER_2);
-    setDrawBuffer(BUFFER_1);
-    blitPrerenderScreen(0);
-    deInterlaceViewportBuffer(BUFFER_1);
 
     // FPS calculation
     uint8_t frame_count = 0;
@@ -745,9 +733,12 @@ int main(void)
             sortScene();
         }
 
-        // cull and project before the wait: it only reads the camera, not the buffer on screen
+        // Cull, project and rasterize before the wait: none of it touches a frame buffer (unless
+        // the span list overflows, see fill.h), so it runs while the LCD still shows the last
+        // frame, and only drawSpans below is tied to the refresh
         const uint24_t project_start = CYCLES();
         projectScene();
+        fillScene(projected, num_projected, draw_buffer_ctrl);
         const uint24_t project_cycles = CYCLES() - project_start;
 
         // this eliminates flickering. Idle time, so it is left out of the frame time
@@ -755,14 +746,11 @@ int main(void)
         waitForBufferScan();
         wait_cycles = CYCLES() - wait_cycles;
 
-        // blit prerendered display
-        blitPrerenderScreen(0);
-
+        // every viewport pixel of the field: the visible parts of the boxes and the background
         const uint24_t draw_start = CYCLES();
+        drawSpans();
 
-        drawScene();
-
-        // scene time: projectScene (before the wait) + graphx
+        // scene time: projection and rasterization (before the wait) + drawing the spans
         const uint24_t draw_cycles = CYCLES() - draw_start + project_cycles;
 
         // FPS and timings ("make hud" builds only)

@@ -1,15 +1,16 @@
 ; sortRecords: the painter sort of the scene (main.c, sortScene).
 ;
-;   void sortRecords(int8_t (*rec)[4], int8_t (*scratch)[4], uint8_t *keys, uint8_t n,
+;   void sortRecords(int8_t (*rec)[5], int8_t (*scratch)[5], uint8_t *keys, uint8_t n,
 ;                    uint8_t bx, uint8_t by, uint8_t bz)
 ;
-; Sorts the n records {X, Y, Z, colour} far to near by their Manhattan distance in cells from the
+; Sorts the n records {X, Y, Z, material, exposed faces} far to near by their Manhattan distance in cells from the
 ; camera, gridDist[X + bx] + gridDist[Y + by] + gridDist[Z + bz] with 8-bit adds (main.c explains
 ; why the low byte of the grid index is enough). A stable counting sort in three passes over
 ; rec, then scratch is copied back over rec. keys must hold n bytes. n must be 1 .. 255.
 ;
-; Measured per sort: 5.3k cycles for 7 records, 59k for 120 (the same sort in C: 7.9k and 127k,
-; the old qsort: 41k-48k and 1.1M-1.8M). About 470 cycles per record plus a little per key.
+; Measured per sort (with the earlier 4-byte records): 5.3k cycles for 7 records, 59k for 120 (the
+; same sort in C: 7.9k and 127k, the old qsort: 41k-48k and 1.1M-1.8M). About 470 cycles per
+; record plus a little per key.
 ;
 ; Speed tricks:
 ; - gridDist, the counts and the start pointers each begin on a 256-byte boundary, so setting the
@@ -17,7 +18,7 @@
 ; - bx, by and bz are written into the add a, n instructions below (self-modifying code: the
 ;   program runs from RAM), which leaves b free for djnz.
 ; - The start of each key in scratch is kept as a 24-bit pointer, so placing a record needs no
-;   multiply by 4.
+;   multiply by the record size.
 ; - Pass 1 also tracks the largest key (in a patched cp), so the prefix pass only visits keys
 ;   max .. 0, and for an empty key only tests the count. It clears each used count as it reads
 ;   it, so they are all zero again for the next sort without a separate clear.
@@ -27,6 +28,7 @@
 
 #include "engine.h"
 
+#define REC_SIZE	5				/* bytes per scene record */
 #define BUCKETS		3 * GRID_RANGE + 1		/* keys 0 .. 3 GRID_RANGE. No parentheses (see CLAUDE.md), so wrap it when multiplying */
 
 #if 3 * (3 * GRID_RANGE) + 2 > 255
@@ -89,7 +91,7 @@ _sortRecords:
 	inc	ix
 	ld	l, a
 	inc	(hl)
-	lea	iy, iy + 4
+	lea	iy, iy + REC_SIZE
 	djnz	.Lkey
 
 	; ---- pass 2: where each key starts in scratch, farthest key first ----
@@ -123,10 +125,13 @@ _sortRecords:
 	push	hl
 	sbc	hl, hl
 	ld	l, c
+	push	hl
 	add	hl, hl
 	add	hl, hl
 	add	hl, de
-	ex	de, hl			; de += 4 count
+	pop	de
+	add	hl, de
+	ex	de, hl			; de += REC_SIZE count
 	pop	hl
 	jr	.Lnext
 
@@ -157,20 +162,21 @@ _sortRecords:
 	ld	a, (iy + 3)
 	ld	(hl), a
 	inc	hl
+	ld	a, (iy + 4)
+	ld	(hl), a
+	inc	hl
 	ld	(ix + 0), hl
-	lea	iy, iy + 4
+	lea	iy, iy + REC_SIZE
 	djnz	.Lplace
 
 	; ---- copy scratch back over the records ----
 	ld	iy, 0
 	add	iy, sp
-	or	a, a
-	sbc	hl, hl
-	ld	l, (iy + A_N)
-	add	hl, hl
-	add	hl, hl
+	ld	h, (iy + A_N)
+	ld	l, REC_SIZE
+	mlt	hl
 	push	hl
-	pop	bc			; 4 n bytes
+	pop	bc			; REC_SIZE n bytes
 	ld	de, (iy + A_REC)
 	ld	hl, (iy + A_SCRATCH)
 	ldir
