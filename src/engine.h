@@ -75,7 +75,7 @@
 // single pixel: 2 projections and one 1-pixel span instead of 12 projections and up to 3 faces.
 // A box spans about 64 / depth pixels, so at 10 units it is a 6 pixel rectangle. Lower values are
 // faster and blockier; values at or beyond the far plane (TABLE_RENDER_DIST) turn a level off.
-#define LOD_RECT_DIST   8
+#define LOD_RECT_DIST   12
 #define LOD_PIXEL_DIST  24
 
 #ifndef __ASSEMBLER__
@@ -102,7 +102,8 @@ extern int24_t cam_kxmid3, cam_kzmid3;
 // level of detail (x3): BOX_RECT when z00 >= cam_lod_rect, one pixel when z00 >= cam_lod_pix
 extern int24_t cam_lod_rect, cam_lod_pix;
 // culling, all x3. With x00/z00 the camera space of corner (X-1, Z-1), a box is kept when
-//   (uint)(z00 - zlo) < zspan    every corner in [NEAR_PLANE, FAR_PLANE)
+//   (uint)(z00 - zlo) < zspan    the farthest corner in [NEAR_PLANE, FAR_PLANE); a nearer corner
+//                                is projected at NEAR_PLANE (project.S, LOG_ZC)
 //   4 x00 + 5 z00 >= cxl         not entirely left of the view  (xmax >= -1.25 zmax)
 //   4 x00 - 5 z00 <= cxr         not entirely right of the view (xmin <= 1.25 zmax)
 // (the view is |x| <= 1.25 z: 80 px half width at TABLE_FOCAL_LENGTH 64)

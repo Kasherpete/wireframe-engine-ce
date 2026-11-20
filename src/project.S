@@ -36,6 +36,10 @@
 ; (or values between them) at a depth between the nearest and the farthest corner, which the same
 ; proof covers.
 ;
+; Near plane: a box is kept when its FARTHEST corner is in [NEAR_PLANE, FAR_PLANE). A nearer corner
+; has its depth raised to NEAR_PLANE (LOG_ZC) before the lookup. The proof still holds: the x and y
+; bounds come from the farthest corner, and raising a depth only shrinks the spread to it.
+;
 ; Signed compares use the sign of the sbc/adc result: every value here is far below 2^22, so the
 ; subtraction cannot overflow.
 ;
@@ -140,12 +144,40 @@
 2:
 	.endm
 
+; in: hl = depth z (x3), anywhere from behind the camera up to the far plane. A corner nearer than
+; NEAR_PLANE is projected at NEAR_PLANE instead (its x and y kept), so a box straddling the near
+; plane stretches over the screen instead of vanishing. out: bc = logTable[z] - EXP_BASE.
+; clobbers de, hl
+	.macro	LOG_ZC
+	ld	de, 3 * NEAR_PLANE
+	or	a, a
+	sbc	hl, de
+	jp	p, 1f
+	ld	hl, 0			; z < near: z - near is replaced by 0
+1:	add	hl, de			; max(z, near)
+	LOG_Z
+	.endm
+
 ; project a stored log/sign pair and store it
 	.macro	PROJECT_TO lv, sv, centre, slot
 	ld	hl, (VAR(\lv))
 	ld	a, (VAR(\sv))
 	PROJECT	\centre
 	ld	(OUT(\slot)), hl
+	.endm
+
+	; ---- the y logs are shared by every corner ----
+	.macro	YLOGS
+	ld	hl, (VAR(V_YT))
+	LOG_ABS
+	ld	(VAR(V_LT)), hl
+	ld	(VAR(V_ST)), a
+	ld	hl, (VAR(V_YT))
+	ld	de, 3 * SUB
+	add	hl, de			; box bottom
+	LOG_ABS
+	ld	(VAR(V_LB)), hl
+	ld	(VAR(V_SB)), a
 	.endm
 
 ; axis-aligned face at the depth in bc: left right top bottom into slots s0..s3
@@ -159,7 +191,7 @@
 ; vertical edge at camera (.Lcx, .Lcz): x, top y, bottom y into slots sx, st, sb
 	.macro	CORNER sx, st, sb
 	ld	hl, (VAR(V_CZ))
-	LOG_Z
+	LOG_ZC
 	ld	hl, (VAR(V_CX))
 	LOG_ABS
 	PROJECT	CENTRE_X
@@ -349,35 +381,30 @@ _projectRecords:
 	; the box is kept: iy = its slot in out[]
 	ld	iy, (VAR(V_OUT))
 
-	; ---- level of detail, by the depth of the nearest corner (z00 + kzmin3) ----
+	; ---- level of detail, by the depth of the nearest corner (z00 + kzmin3). A ground panel
+	; (y cell 0: record Y = 1, a flat patch drawn over the ground plane) never gets it: as a
+	; rectangle its whole y extent would show, so it would look thick ----
 	ld	hl, (VAR(V_Z00))
 	ld	de, (VAR(V_CAM_LODRECT))
 	or	a, a
 	sbc	hl, de
-	call	p, .Llod_side		; rectangle or pixel: keep only the side it shows most
+	jp	m, .Lfull
+	ld	hl, (VAR(V_REC))
+	inc	hl
+	ld	a, (hl)
+	dec	a
+	jp	z, .Lfull		; ground panel: a full box at any distance
+	call	.Llod_side		; rectangle or pixel: keep only the side it shows most
 	ld	hl, (VAR(V_Z00))
 	ld	de, (VAR(V_CAM_LODPIX))
 	or	a, a
 	sbc	hl, de
 	jp	p, .Lpixel
+	YLOGS
+	jp	.Lrect			; (z00 >= lod_rect is known here)
 
-	; ---- the y logs are shared by every corner ----
-	ld	hl, (VAR(V_YT))
-	LOG_ABS
-	ld	(VAR(V_LT)), hl
-	ld	(VAR(V_ST)), a
-	ld	hl, (VAR(V_YT))
-	ld	de, 3 * SUB
-	add	hl, de			; box bottom
-	LOG_ABS
-	ld	(VAR(V_LB)), hl
-	ld	(VAR(V_SB)), a
-
-	ld	hl, (VAR(V_Z00))
-	ld	de, (VAR(V_CAM_LODRECT))
-	or	a, a
-	sbc	hl, de
-	jp	p, .Lrect
+.Lfull:
+	YLOGS
 
 	ld	a, (VAR(V_CAM_CARDINAL))
 	or	a, a
@@ -433,7 +460,7 @@ _projectRecords:
 	ld	hl, (VAR(V_Z00))
 	ld	de, (VAR(V_CAM_KZMIN3))
 	add	hl, de
-	LOG_Z
+	LOG_ZC				; the near face may be nearer than the near plane
 	FACE	0, 1, 2, 3		; nl nr nt nb
 
 	ld	a, BOX_AXIS

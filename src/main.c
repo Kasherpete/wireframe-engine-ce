@@ -772,10 +772,10 @@ _Static_assert((int32_t)MAX_DT * TURN_SPEED < 0x7fffffff / 2, "per-frame turn st
 // what updateMotion is asked to do (handleInput reads the keys)
 #define MOVE_FORWARD     0x01   // [up]
 #define MOVE_BACK        0x02   // [down]
-#define MOVE_LEFT        0x04   // [left]: strafe
-#define MOVE_RIGHT       0x08   // [right]: strafe
-#define MOVE_TURN_LEFT   0x10   // [mode]
-#define MOVE_TURN_RIGHT  0x20   // [del]
+#define MOVE_TURN_LEFT        0x04   // [left]: strafe
+#define MOVE_TURN_RIGHT       0x08   // [right]: strafe
+#define MOVE_LEFT   0x10   // [mode]
+#define MOVE_RIGHT  0x20   // [del]
 #define MOVE_JUMP        0x40   // [2nd]: held, it jumps again on landing
 #define MOVE_CROUCH      0x80   // [alpha], while held
 
@@ -879,10 +879,10 @@ static void handleInput(uint24_t dt) {
     uint8_t keys = 0;
     if (arrows & kb_Up)          keys |= MOVE_FORWARD;
     if (arrows & kb_Down)        keys |= MOVE_BACK;
-    if (arrows & kb_Left)        keys |= MOVE_LEFT;
-    if (arrows & kb_Right)       keys |= MOVE_RIGHT;
-    if (group1 & kb_Mode)        keys |= MOVE_TURN_LEFT;
-    if (group1 & kb_Del)         keys |= MOVE_TURN_RIGHT;
+    if (arrows & kb_Left)        keys |= MOVE_TURN_LEFT;
+    if (arrows & kb_Right)       keys |= MOVE_TURN_RIGHT;
+    if (group1 & kb_Mode)        keys |= MOVE_LEFT;
+    if (group1 & kb_Del)         keys |= MOVE_RIGHT;
     if (group1 & kb_2nd)         keys |= MOVE_JUMP;
     if (kb_Data[2] & kb_Alpha)   keys |= MOVE_CROUCH;
     updateMotion(keys, dt);
