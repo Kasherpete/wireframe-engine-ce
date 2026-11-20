@@ -74,6 +74,7 @@ int main(void) {
     computeExposure();
     initFaceTables();
     initGridDist();
+    initLodSlots();
     setupCamera();
     sortScene();
 

@@ -257,10 +257,12 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 - **Level of detail.** A box whose nearest corner is at least `lod_rect_dist` units deep
   (default `LOD_RECT_DIST` = 12 in `engine.h`) becomes `BOX_RECT`: the rectangle of its x and y
   extent projected at its centre depth (4 projections instead of 8–12, and one rectangle instead
-  of up to 3 faces in `fill.S`). From `lod_pixel_dist` (default 36) on it is a single pixel at
-  its projected centre (2 projections). The colour is the material's side the camera faces most
-  (`lod_slot`, rebuilt by `initLodSlots` when the dominant axis changes): at a distance sides
-  show far more than tops. `lod_rect_dist` and `lod_pixel_dist` are variables in `main.c`, read
+  of up to 3 faces in `fill.S`). From `lod_pixel_dist` (default 36) on it is a 2×2 block of
+  logical pixels at its projected centre (2 projections). The colour is a visible side if there is
+  one (at a distance sides show far more than tops): `.Llod_side` in `project.S` keeps only the x or
+  z side that points at the camera *position* most (larger of |dx|, |dz| in cells, by `gridDist`;
+  z on a tie), so it doesn't change while turning. `lod_slot` is then a fixed table
+  (`initLodSlots`, once at startup). `lod_rect_dist` and `lod_pixel_dist` are variables in `main.c`, read
   every frame, so a game can change them at runtime; a value at or beyond the far plane turns a
   level off. A box is about 64 / depth pixels wide: 5 px at 12 units, 1.8 px at 36.
   - Measured on a 241-box scene reaching 36 units (`SCENE=far` in `utils/bench`, 60 views):

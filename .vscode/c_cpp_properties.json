@@ -10,7 +10,7 @@
             "compilerPath": "/home/keagan/CEdev/bin/ez80-clang",
             "cStandard": "gnu23",
             "cppStandard": "gnu++17",
-            "intelliSenseMode": "linux-gcc-x64"
+            "intelliSenseMode": "clang-x64"
         }
     ],
     "version": 4

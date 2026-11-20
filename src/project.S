@@ -11,7 +11,8 @@
 ;
 ; Level of detail: a box whose nearest corner is at least cam_lod_rect deep becomes BOX_RECT, the
 ; rectangle of its x and y extent projected at its centre depth (4 projections instead of 12).
-; From cam_lod_pix on it is one pixel at its projected centre (2 projections).
+; From cam_lod_pix on it is a 2 x 2 block of logical pixels at its projected centre (2 projections).
+; Both keep only the visible side (x or z) that points at the camera position most (.Llod_side).
 ;
 ; Why assembly: clang turns every multiply, right shift and even AND into a library call. And the
 ; CE is memory bound: roughly 2 cycles per byte touched, opcode bytes included. So this code
@@ -336,6 +337,11 @@ _projectRecords:
 
 	; ---- level of detail, by the depth of the nearest corner (z00 + kzmin3) ----
 	ld	hl, (VAR(V_Z00))
+	ld	de, (VAR(V_CAM_LODRECT))
+	or	a, a
+	sbc	hl, de
+	call	p, .Llod_side		; rectangle or pixel: keep only the side it shows most
+	ld	hl, (VAR(V_Z00))
 	ld	de, (VAR(V_CAM_LODPIX))
 	or	a, a
 	sbc	hl, de
@@ -492,7 +498,9 @@ _projectRecords:
 	add	hl, de
 	LOG_ABS
 	PROJECT	CENTRE_X
+	dec	hl			; 2 x 2 logical pixels around the centre
 	ld	(OUT(0)), hl
+	inc	hl
 	inc	hl
 	ld	(OUT(1)), hl
 	ld	hl, (VAR(V_YT))
@@ -500,11 +508,48 @@ _projectRecords:
 	add	hl, de
 	LOG_ABS
 	PROJECT	CENTRE_Y
+	dec	hl
 	ld	(OUT(2)), hl
+	inc	hl
 	inc	hl
 	ld	(OUT(3)), hl
 	ld	a, BOX_RECT
 	jp	.Ldone
+
+	; ==== level of detail colour: of the visible x and z sides, keep only the one that points
+	; at the camera position most (the axis with the larger distance in cells, z on a tie), so
+	; the colour depends on where the camera is, not where it looks. lod_slot (main.c) then
+	; picks that side. gridDist is exact for a kept box (its grid index is in 0 .. 2 GRID_RANGE)
+.Llod_side:
+	ld	hl, (VAR(V_REC))
+	ld	de, _gridDist		; 256-aligned: e is the index
+	ld	a, (_cam_bias_x)
+	add	a, (hl)
+	ld	e, a
+	ld	a, (de)
+	ld	c, a			; |dx|
+	inc	hl
+	inc	hl
+	ld	a, (_cam_bias_z)
+	add	a, (hl)
+	ld	e, a
+	ld	a, (de)			; |dz|
+	cp	a, c
+	ld	a, (VAR(V_FACES))
+	ld	c, a
+	jr	c, 1f
+	and	a, FACE_ZP | FACE_ZN	; z dominates: drop the x sides if a z side shows
+	ret	z
+	ld	a, c
+	and	a, ~(FACE_XP | FACE_XN) & 0xff
+	ld	(VAR(V_FACES)), a
+	ret
+1:	and	a, FACE_XP | FACE_XN	; x dominates: drop the z sides if an x side shows
+	ret	z
+	ld	a, c
+	and	a, ~(FACE_ZP | FACE_ZN) & 0xff
+	ld	(VAR(V_FACES)), a
+	ret
 
 	; ==== any other yaw: project the 4 vertical edges ====
 .Lgeneral:

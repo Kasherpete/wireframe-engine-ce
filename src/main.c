@@ -446,26 +446,16 @@ uint8_t lod_rect_dist = LOD_RECT_DIST;
 uint8_t lod_pixel_dist = LOD_PIXEL_DIST;
 
 // The colour of a BOX_RECT box by its FACE_* bits (fill.h, lod_slot): far away a side shows far
-// more than a top (that shrinks with height / depth), so the side faced most if visible, then the
-// other side, then the top or bottom. zfirst: the z sides are faced more than the x sides
-static uint8_t lod_zfirst = 2;  // none yet
-
-static void initLodSlots(uint8_t zfirst) {
+// more than a top (that shrinks with height / depth), so a side if visible, else the top or bottom.
+// project.S has already kept only the side that points at the camera position most (.Llod_side),
+// so the order here doesn't matter and the table is fixed: built once at startup
+static void initLodSlots(void) {
     for (uint8_t m = 0; m < 64; m++) {
-        const uint8_t zs = m & (FACE_ZP | FACE_ZN), xs = m & (FACE_XP | FACE_XN);
         uint8_t slot = (m & FACE_TOP) ? MAT_TOP : MAT_BOTTOM;
-        if (zfirst) {
-            if (zs) {
-                slot = MAT_ZSIDE;
-            } else if (xs) {
-                slot = MAT_XSIDE;
-            }
-        } else {
-            if (xs) {
-                slot = MAT_XSIDE;
-            } else if (zs) {
-                slot = MAT_ZSIDE;
-            }
+        if (m & (FACE_ZP | FACE_ZN)) {
+            slot = MAT_ZSIDE;
+        } else if (m & (FACE_XP | FACE_XN)) {
+            slot = MAT_XSIDE;
         }
         lod_slot[m] = slot;
     }
@@ -529,12 +519,6 @@ static void setupCamera(void) {
     // level of detail: by the depth of the nearest corner, z00 + kzmin3
     cam_lod_rect = 3 * SUB * (int24_t)lod_rect_dist - cam_kzmin3;
     cam_lod_pix  = 3 * SUB * (int24_t)lod_pixel_dist - cam_kzmin3;
-    // a rectangle shows the side faced most: the z sides while looking more along z than x
-    const uint8_t zfirst = (c < 0 ? -c : c) >= (s < 0 ? -s : s);
-    if (zfirst != lod_zfirst) {
-        lod_zfirst = zfirst;
-        initLodSlots(zfirst);
-    }
 
     // culling constants, see engine.h
     cam_zlo   = 3 * NEAR_PLANE - cam_kzmin3;
@@ -546,11 +530,14 @@ static void setupCamera(void) {
 
 
 // the layout fill.S reads
+// IntelliSense sizes int24_t differently from ez80-clang and would flag these; the real build checks them
+#ifndef __INTELLISENSE__
 _Static_assert(sizeof(projected_box_t) == PB_SIZE, "engine.h PB_SIZE out of sync");
 _Static_assert(__builtin_offsetof(projected_box_t, kind) == PB_KIND, "engine.h PB_KIND out of sync");
 _Static_assert(__builtin_offsetof(projected_box_t, faces) == PB_FACES, "engine.h PB_FACES out of sync");
 _Static_assert(__builtin_offsetof(projected_box_t, mat) == PB_MAT, "engine.h PB_MAT out of sync");
 _Static_assert(__builtin_offsetof(projected_box_t, v) == PB_V, "engine.h PB_V out of sync");
+#endif
 
 static projected_box_t projected[LEN(coordinates)];
 static uint8_t num_projected;
@@ -912,6 +899,7 @@ int main(void)
     computeExposure();
     initFaceTables();
     initGridDist();
+    initLodSlots();
     setupCamera();
     sortScene();
 

@@ -71,7 +71,7 @@
 // A box spans about 64 / depth pixels, so at 10 units it is a 6 pixel rectangle. Lower values are
 // faster and blockier; values at or beyond the far plane (TABLE_RENDER_DIST) turn a level off.
 #define LOD_RECT_DIST   12
-#define LOD_PIXEL_DIST  36
+#define LOD_PIXEL_DIST  24
 
 #ifndef __ASSEMBLER__
 #include <stdint.h>

@@ -33,7 +33,7 @@ void fillScene(const projected_box_t *boxes, uint8_t n, uint24_t base);
 void drawSpans(void);
 
 // The colour of a BOX_RECT box: lod_slot[faces] is the MAT_* entry of its material to use, by
-// the FACE_* bits projectScene kept. main.c fills it per frame (it depends on the yaw)
+// the FACE_* bits projectScene kept (for a BOX_RECT, at most one side). main.c fills it at startup
 extern uint8_t lod_slot[64];
 
 // main.c
