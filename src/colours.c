@@ -25,15 +25,26 @@ const uint8_t palette[32] = {
 // darker shade (the two nibbles of a byte are two LCD pixels), the x sides the darker shade, the
 // bottom darker still. The darker shades follow the PICO-8 palette's own ramps (8 red -> 2 dark
 // purple -> 1 dark blue, ...)
+// Fogged (materials[MAT_FOGGED + m], make fog only): every byte half the face colour, half the
+// sky (FOG). With one nibble left, the z side takes the x side's darker shade: walls and tops
+// stay apart, the two wall shades merge in the haze
 #define MAT(m, dark, darker) {(m) * 0x11, (dark) * 0x11, (m) * 0x10 + (dark), (darker) * 0x11}
-const uint8_t materials[MAT_COUNT][4] = {
-    MAT(0, 0, 0),    MAT(1, 0, 0),    MAT(2, 1, 0),    MAT(3, 1, 0),
-    MAT(4, 2, 1),    MAT(5, 1, 0),    MAT(6, 13, 5),   MAT(7, 6, 13),
-    MAT(8, 2, 1),    MAT(9, 4, 2),    MAT(10, 9, 4),   MAT(11, 3, 1),
-    MAT(12, 13, 5),  MAT(13, 5, 1),   MAT(14, 8, 2),   MAT(15, 14, 8),
+#define FOG                  (SKY_COLOUR & 0x0f)
+#define FOGMAT(m, dark, darker) {(m) * 0x10 + FOG, (dark) * 0x10 + FOG, (dark) * 0x10 + FOG, (darker) * 0x10 + FOG}
+#define PALETTE_MATS(M) \
+    M(0, 0, 0),    M(1, 0, 0),    M(2, 1, 0),    M(3, 1, 0), \
+    M(4, 2, 1),    M(5, 1, 0),    M(6, 13, 5),   M(7, 6, 13), \
+    M(8, 2, 1),    M(9, 4, 2),    M(10, 9, 4),   M(11, 3, 1), \
+    M(12, 13, 5),  M(13, 5, 1),   M(14, 8, 2),   M(15, 14, 8)
+const uint8_t materials[2 * MAT_COUNT][4] = {
+    PALETTE_MATS(MAT),
+    PALETTE_MATS(FOGMAT),
 };
+_Static_assert(MAT_FOGGED == MAT_COUNT, "the fogged materials follow the plain ones");
 
 uint24_t ground_colour3;
+uint24_t bg_dither3;
+uint8_t bg_rows[3] = {CENTRE_Y, 0, VIEW_H - CENTRE_Y};
 
 void coloursInit(void) {
     uint8_t g = GROUND_COLOUR;
@@ -41,4 +52,5 @@ void coloursInit(void) {
         g = materials[world->ground][MAT_TOP];
     }
     ground_colour3 = g * (uint24_t)0x010101;
+    bg_dither3 = (uint8_t)((g & 0xf0) | FOG) * (uint24_t)0x010101;
 }

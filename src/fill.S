@@ -16,8 +16,8 @@
 ; closed the farther boxes are not looked at. A distant box (BOX_RECT, the level of detail of
 ; projectRecords) is one rectangle instead of its faces: the same rows, with the same [xl, xr) in each.
 ;
-; The background (sky above the horizon, row CENTRE_Y, ground below) is filled with push, row by
-; row, before the spans are drawn, but only in rows that are still open (or lost part of a row to
+; The background (sky above the horizon, row CENTRE_Y, ground below; with fog, bands of it in sky
+; colour and dithered, bg_rows in fill.h) is filled with push, row by row, before the spans are drawn, but only in rows that are still open (or lost part of a row to
 ; an overflow, see below): a row that boxes closed is entirely written by spans.
 ;
 ; Rows rather than columns: floors are the bulk of a voxel scene, and a floor tile is several
@@ -169,6 +169,8 @@
 	.assume	ADL = 1
 
 	.extern	_ground_colour3
+	.extern	_bg_dither3
+	.extern	_bg_rows
 
 ; ==================================================================================================
 	.section	.text._fillScene,"ax",@progbits
@@ -1183,7 +1185,8 @@ _drawSpans:
 	ld	hl, (.Lfield)
 	ld	ix, .Lrows
 	ld	de, SKY_COLOUR * 0x010101
-	ld	iyl, CENTRE_Y
+	ld	a, (_bg_rows)		; at least CENTRE_Y (fill.h)
+	ld	iyl, a
 	; A row nothing was drawn in (one open interval, [0, VIEW_W)) gets both of its LCD rows here,
 	; 320 bytes by push (about 3.3 cycles per byte), and deinterlaceFrame skips it (ldir would cost
 	; about 7.7 per byte). Other open rows get the background in their drawn LCD row only
@@ -1227,8 +1230,18 @@ _drawSpans:
 	jp	nz, 1b
 	.endm
 	BG_ROWS
+	ld	a, (_bg_rows + 1)	; the ground in the fog (make fog), maybe none
+	or	a, a
+	jp	z, .Lbg_ground
+	ld	iyl, a
+	ld	de, (_bg_dither3)
+	BG_ROWS
+.Lbg_ground:
+	ld	a, (_bg_rows + 2)	; the ground (none when fog reaches the bottom row)
+	or	a, a
+	jp	z, .Lspans
+	ld	iyl, a
 	ld	de, (_ground_colour3)	; the world ground plane (colours.c)
-	ld	iyl, VIEW_H - CENTRE_Y
 	BG_ROWS
 
 	; ---- the spans ----

@@ -8,15 +8,16 @@
 ; |k| <= 128 (sinTable, SUB), so frac |k| is one mlt. stride is 1 or 2.
 ;
 ; Why assembly: the C loop cost about 140 cycles per entry (a pointer step by a variable stride, a
-; library multiply and shift for v): 23k cycles per frame for the 5 tables. This is about 45.
+; library multiply and shift for v): 23k cycles per frame for the 5 tables of 33 entries. This is
+; about 45.
 ;
 ; ABI: arguments at sp+3 .. sp+12; IX preserved; AF BC DE HL IY clobbered.
 ; No apostrophes in comments: this file goes through the C preprocessor.
 
 #include "engine.h"
 
-#if GRID_RANGE != 16 || SUB != 128
-#error "v = -16 k - ... is 4 shifts, and |k| <= 128 fits mlt"
+#if GRID_RANGE != 24 || SUB != 128
+#error "v = -24 k - ... is 8 k + 16 k, and |k| <= 128 fits mlt"
 #endif
 
 	.assume	ADL = 1
@@ -50,15 +51,18 @@ _fillRotTable:
 2:	ld	c, h			; k >= 0: q = p >> 8
 	ld	hl, 0
 	ld	l, c
-3:	; ---- v = -16 k - q, then 3 v and 3 k ----
+3:	; ---- v = -24 k - q, then 3 v and 3 k ----
 	push	hl
 	pop	bc			; q
 	ld	hl, (iy + 9)
 	add	hl, hl
 	add	hl, hl
-	add	hl, hl
+	add	hl, hl			; 8 k
+	push	hl
+	pop	de
 	add	hl, hl			; 16 k
-	add	hl, bc			; 16 k + q
+	add	hl, de			; 24 k
+	add	hl, bc			; 24 k + q
 	ex	de, hl
 	or	a, a
 	sbc	hl, hl

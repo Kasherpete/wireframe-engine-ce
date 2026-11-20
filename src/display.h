@@ -33,7 +33,9 @@
 #define BUFFER_1  0xD40000    // drawn and shown in turn
 #define BUFFER_2  0xD49600
 #define DBL_BUF1  0xD52C00    // fill.S span list (fill.h); nothing else may use it
-#define DBL_BUF2  0xD5C200    // blank frame during displayInit, then scratch (chunks.c, fill_ref.c)
+#define DBL_BUF2  0xD5C200    // blank frame during displayInit, then scratch: chunks.c (the occupancy
+                              // grid, then chunk slots), or in the bench fill_ref.c's lists
+#define DBL_BUF2_END 0xD65800 // the end of VRAM
 
 #define draw_buffer_ctrl    lcd_LpBase   // where graphx draws
 #define screen_buffer_ctrl  lcd_UpBase   // what the LCD scans out

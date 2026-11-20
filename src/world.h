@@ -2,7 +2,7 @@
 // utils/make_world.py writes it and documents the byte layout; the structs below are the same.
 //
 // The world is split into chunk columns of CHUNK_SIZE x CHUNK_SIZE cells (x and z), of any height,
-// with at most CHUNK_MAX voxels each. The engine keeps the 5 x 5 chunks around the camera in RAM
+// with at most CHUNK_MAX voxels each. The engine keeps the 7 x 7 chunks around the camera in RAM
 // (chunks.c) and reads the rest from the file as the camera moves. An archived AppVar is read in
 // place, straight from flash.
 //

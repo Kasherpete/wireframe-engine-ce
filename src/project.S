@@ -15,9 +15,11 @@
 ; chunk + 1. The voxel spans the cell whose grid index that is (engine.h).
 ;
 ; Level of detail: a box whose nearest corner is at least cam_lod_rect deep becomes BOX_RECT, the
-; rectangle of its x and y extent projected at its centre depth (4 projections instead of 12).
-; From cam_lod_pix on it is a 2 x 2 block of logical pixels at its projected centre (2 projections).
-; Both keep only the visible side (x or z) that points at the camera position most (.Llod_side).
+; rectangle of its x and y extent projected at its centre depth (4 projections instead of 12). It
+; keeps only the visible side (x or z) that points at the camera position most (.Llod_side).
+;
+; Fog: a box whose centre is at least cam_fog deep gets material + MAT_FOGGED (the fogged colours,
+; colours.c). Without fog cam_fog is beyond any box.
 ;
 ; Why assembly: clang turns every multiply, right shift and even AND into a library call. And the
 ; CE is memory bound: roughly 2 cycles per byte touched, opcode bytes included. So this code
@@ -36,9 +38,15 @@
 ; (or values between them) at a depth between the nearest and the farthest corner, which the same
 ; proof covers.
 ;
-; Near plane: a box is kept when its FARTHEST corner is in [NEAR_PLANE, FAR_PLANE). A nearer corner
-; has its depth raised to NEAR_PLANE (LOG_ZC) before the lookup. The proof still holds: the x and y
-; bounds come from the farthest corner, and raising a depth only shrinks the spread to it.
+; Near plane: a box is kept when its FARTHEST corner is in [NEAR_PLANE, far plane), so a wall the
+; camera is pressed against (the body is narrower than the near plane is deep) does not vanish.
+; Its part nearer than NEAR_PLANE is clipped: facing N/E/S/W the near face is moved to NEAR_PLANE
+; (LOG_ZC), which is exact. At other yaws (.Lgen_clip) each corner behind the near plane is moved
+; along an edge of the box to a corner in front, to depth NEAR_PLANE: preferring the edge of a
+; visible side, so the sides are cut exactly where the near plane cuts them. That is exact for the
+; sides unless a corner between two visible sides is behind (then one of the two loses a sliver at
+; the screen edge); a top or bottom face may lose a corner triangle. The proof still holds: every
+; point projected lies in the box footprint at a depth >= NEAR_PLANE (gen_tables.py).
 ;
 ; Signed compares use the sign of the sbc/adc result: every value here is far below 2^22, so the
 ; subtraction cannot overflow.
@@ -90,7 +98,7 @@
 #define V_CAM_KXMID3	74
 #define V_CAM_KZMID3	77
 #define V_CAM_LODRECT	80
-#define V_CAM_LODPIX	83
+#define V_CAM_FOG	83
 #define V_ROOM		86
 #define V_SIZE		87
 
@@ -394,14 +402,9 @@ _projectRecords:
 	ld	a, (hl)
 	dec	a
 	jp	z, .Lfull		; ground panel: a full box at any distance
-	call	.Llod_side		; rectangle or pixel: keep only the side it shows most
-	ld	hl, (VAR(V_Z00))
-	ld	de, (VAR(V_CAM_LODPIX))
-	or	a, a
-	sbc	hl, de
-	jp	p, .Lpixel
+	call	.Llod_side		; a rectangle: keep only the side it shows most
 	YLOGS
-	jp	.Lrect			; (z00 >= lod_rect is known here)
+	jp	.Lrect
 
 .Lfull:
 	YLOGS
@@ -469,12 +472,18 @@ _projectRecords:
 	ld	(iy + PB_KIND), a
 	ld	a, (VAR(V_FACES))
 	ld	(iy + PB_FACES), a
-	ld	hl, (VAR(V_REC))
+	ld	hl, (VAR(V_Z00))	; fog: z00 >= cam_fog
+	ld	de, (VAR(V_CAM_FOG))
+	or	a, a
+	sbc	hl, de
+	ld	hl, (VAR(V_REC))	; (ld and inc hl keep the flags)
 	inc	hl
 	inc	hl
 	inc	hl
 	ld	a, (hl)
-	ld	(iy + PB_MAT), a
+	jp	m, 1f
+	add	a, MAT_FOGGED
+1:	ld	(iy + PB_MAT), a
 	lea	iy, iy + PB_SIZE
 	ld	(VAR(V_OUT)), iy
 	inc	(VAR(V_KEPT))
@@ -530,35 +539,6 @@ _projectRecords:
 2:	ld	a, BOX_RECT
 	jp	.Ldone
 
-	; ==== level of detail: one pixel at the projected centre ====
-.Lpixel:
-	ld	hl, (VAR(V_Z00))
-	ld	de, (VAR(V_CAM_KZMID3))
-	add	hl, de
-	LOG_Z
-	ld	hl, (VAR(V_X00))
-	ld	de, (VAR(V_CAM_KXMID3))
-	add	hl, de
-	LOG_ABS
-	PROJECT	CENTRE_X
-	dec	hl			; 2 x 2 logical pixels around the centre
-	ld	(OUT(0)), hl
-	inc	hl
-	inc	hl
-	ld	(OUT(1)), hl
-	ld	hl, (VAR(V_YT))
-	ld	de, 3 * SUB / 2
-	add	hl, de
-	LOG_ABS
-	PROJECT	CENTRE_Y
-	dec	hl
-	ld	(OUT(2)), hl
-	inc	hl
-	inc	hl
-	ld	(OUT(3)), hl
-	ld	a, BOX_RECT
-	jp	.Ldone
-
 	; ==== level of detail colour: of the visible x and z sides, keep only the one that points
 	; at the camera position most (the axis with the larger distance in cells, z on a tie), so
 	; the colour depends on where the camera is, not where it looks. lod_slot (scene.c) then
@@ -596,6 +576,13 @@ _projectRecords:
 
 	; ==== any other yaw: project the 4 vertical edges ====
 .Lgeneral:
+	ld	hl, (VAR(V_Z00))	; nearest corner behind the near plane: clip
+	ld	de, (VAR(V_CAM_KZMIN3))
+	add	hl, de
+	ld	de, 3 * NEAR_PLANE
+	or	a, a
+	sbc	hl, de
+	jp	m, .Lgen_clip
 	ld	hl, (VAR(V_X00))
 	ld	(VAR(V_CX)), hl
 	ld	hl, (VAR(V_Z00))
@@ -633,10 +620,194 @@ _projectRecords:
 	ld	(VAR(V_CZ)), hl
 	CORNER	3, 7, 11
 
-	; Culling already removed nearly everything off screen, so only test for fully inside.
-	; Tops are above bottoms, so (uint)top < H and (uint)bottom < H cover all four y bounds.
 	ld	a, BOX_GEN
 	jp	.Ldone
+
+	; ==== any other yaw, with corners behind the near plane (see Near plane above) ====
+	; The 4 corners {x, z} into .Lcorn, each moved to the near plane if behind it into .Lclp
+	; (24 bytes on: (iy + 24)), then projected like the general path. Rare: a few boxes a frame
+	; at most, beside or in front of a camera close to them
+.Lgen_clip:
+	ld	hl, (VAR(V_X00))
+	ld	(.Lcorn + 0), hl	; corner 0
+	ld	de, (VAR(V_CAM_COS3))
+	add	hl, de
+	ld	(.Lcorn + 6), hl	; corner 1: + (c, s)
+	ld	hl, (VAR(V_Z00))
+	ld	(.Lcorn + 3), hl
+	ld	de, (VAR(V_CAM_SIN3))
+	add	hl, de
+	ld	(.Lcorn + 9), hl
+	ld	hl, (VAR(V_X00))	; corner 2: + (-s, c)
+	ld	de, (VAR(V_CAM_SIN3))
+	or	a, a
+	sbc	hl, de
+	ld	(.Lcorn + 12), hl
+	ld	de, (VAR(V_CAM_COS3))	; corner 3: corner 2 + (c, s)
+	add	hl, de
+	ld	(.Lcorn + 18), hl
+	ld	hl, (VAR(V_Z00))
+	ld	de, (VAR(V_CAM_COS3))
+	add	hl, de
+	ld	(.Lcorn + 15), hl
+	ld	de, (VAR(V_CAM_SIN3))
+	add	hl, de
+	ld	(.Lcorn + 21), hl
+
+	; corner k: its neighbour along its z side is k ^ 1, along its x side k ^ 2 (engine.h)
+	.macro	CLIP_CORNER k, zface, xface
+	ld	iy, .Lcorn + 6 * \k
+	ld	hl, .Lcorn + 6 * (\k ^ 1)
+	ld	de, .Lcorn + 6 * (\k ^ 2)
+	ld	c, \zface
+	ld	b, \xface
+	call	.Lclip_one
+	.endm
+	CLIP_CORNER 0, FACE_ZN, FACE_XN
+	CLIP_CORNER 1, FACE_ZN, FACE_XP
+	CLIP_CORNER 2, FACE_ZP, FACE_XN
+	CLIP_CORNER 3, FACE_ZP, FACE_XP
+
+	ld	iy, (VAR(V_OUT))
+	ld	hl, .Lclp
+	ld	(.Lclip_p), hl
+	ld	a, 4
+	ld	(.Lclip_n), a
+.Lclip_proj:				; corner k into OUT(k), OUT(4 + k), OUT(8 + k): iy moves 3 a corner
+	ld	hl, (.Lclip_p)
+	ld	de, (hl)
+	ld	(VAR(V_CX)), de
+	inc	hl
+	inc	hl
+	inc	hl
+	ld	de, (hl)
+	ld	(VAR(V_CZ)), de
+	inc	hl
+	inc	hl
+	inc	hl
+	ld	(.Lclip_p), hl
+	CORNER	0, 4, 8
+	lea	iy, iy + 3
+	ld	hl, .Lclip_n
+	dec	(hl)
+	jp	nz, .Lclip_proj
+	lea	iy, iy - 12
+	ld	a, BOX_GEN
+	jp	.Ldone
+
+; One corner: iy -> {x, z} of corner k, its result goes to iy + 24. hl -> its neighbour along its
+; z side, de -> along its x side, c and b = the FACE_* bits of those sides. A corner in front of the
+; near plane is copied. One behind it is moved to depth NEAR_PLANE along the edge to a neighbour in
+; front: the z one if both are in front and its side is visible or the x side is not, and the
+; opposite corner (hl + de - iy, which is then in front: the farthest corner is) if neither is.
+.Lclip_one:
+	ld	(.Lnb_z), hl
+	ld	(.Lnb_x), de
+	add	hl, de
+	lea	de, iy + 0
+	or	a, a
+	sbc	hl, de
+	ld	(.Lnb_d), hl
+	ld	hl, (iy + 0)
+	ld	(iy + 24), hl
+	ld	hl, (iy + 3)
+	ld	(iy + 27), hl
+	ld	de, 3 * NEAR_PLANE
+	or	a, a
+	sbc	hl, de
+	ret	p			; in front: as it is
+	ld	hl, (.Lnb_z)
+	call	.Lclip_front
+	jp	m, .Lclip_zb
+	ld	hl, (.Lnb_x)		; the z neighbour is in front
+	call	.Lclip_front
+	ld	hl, (.Lnb_z)
+	jp	m, .Lclip_to		; only it
+	ld	a, (VAR(V_FACES))	; both: the z side unless only the x side is visible
+	and	a, c
+	jr	nz, .Lclip_to
+	ld	a, (VAR(V_FACES))
+	and	a, b
+	jr	z, .Lclip_to
+	ld	hl, (.Lnb_x)
+	jr	.Lclip_to
+.Lclip_zb:
+	ld	hl, (.Lnb_x)
+	call	.Lclip_front
+	ld	hl, (.Lnb_x)
+	jp	p, .Lclip_to
+	ld	hl, (.Lnb_d)
+.Lclip_to:
+	; hl -> corner A in front, iy -> D behind: x = xD + sign(dx) |dx| a / b, z = NEAR_PLANE,
+	; with dx = xA - xD, a = NEAR_PLANE - zD, b = zA - zD (0 < a < b <= SUB: one edge).
+	; |dx| a / b = expTable[log |dx| + log a - log b - log FOCAL_LENGTH], logs x3 as usual
+	push	hl
+	inc	hl
+	inc	hl
+	inc	hl
+	ld	hl, (hl)		; zA
+	ld	de, (iy + 3)
+	or	a, a
+	sbc	hl, de			; b
+	ld	de, _logTable
+	add	hl, de
+	ld	hl, (hl)
+	ld	(.Lclip_lb), hl
+	ld	hl, 3 * NEAR_PLANE
+	ld	de, (iy + 3)
+	or	a, a
+	sbc	hl, de			; a
+	ld	de, _logTable
+	add	hl, de
+	ld	hl, (hl)
+	ld	de, (.Lclip_lb)
+	or	a, a
+	sbc	hl, de
+	ld	(.Lclip_lb), hl		; log a - log b
+	pop	hl
+	ld	hl, (hl)		; xA
+	ld	de, (iy + 0)
+	or	a, a
+	sbc	hl, de			; dx
+	LOG_ABS				; a = 1: dx <= 0
+	ld	de, (.Lclip_lb)
+	add	hl, de
+	ld	de, 3 * (TABLE_FOCAL_LOG2 * TABLE_LOG_STEPS + EXP_TABLE_MIN)
+	or	a, a
+	sbc	hl, de			; offset into expTable
+	jp	p, 1f
+	ld	hl, 0			; below the table: rounds to 0
+	jr	2f
+1:	ld	de, _expTable
+	add	hl, de
+	ld	hl, (hl)		; |dx| a / b
+2:	push	hl
+	pop	de
+	add	hl, hl
+	add	hl, de			; x3
+	bit	0, a
+	jr	z, 3f
+	ex	de, hl
+	or	a, a
+	sbc	hl, hl
+	sbc	hl, de			; dx <= 0: minus
+3:	ld	de, (iy + 0)
+	add	hl, de
+	ld	(iy + 24), hl
+	ld	hl, 3 * NEAR_PLANE
+	ld	(iy + 27), hl
+	ret
+
+; sign flag: negative if the corner at hl is behind the near plane. Clobbers de, hl
+.Lclip_front:
+	inc	hl
+	inc	hl
+	inc	hl
+	ld	hl, (hl)
+	ld	de, 3 * NEAR_PLANE
+	or	a, a
+	sbc	hl, de
+	ret
 
 
 	.section	.bss._projectRecords,"aw",@nobits
@@ -676,11 +847,11 @@ _cam_cardinal:	.zero	1
 .Lleft:		.zero	1			; records left
 .Lkept:		.zero	1
 .Lfaces:	.zero	1			; FACE_* of the current box
-	.global	_cam_kxmid3, _cam_kzmid3, _cam_lod_rect, _cam_lod_pix
+	.global	_cam_kxmid3, _cam_kzmid3, _cam_lod_rect, _cam_fog
 _cam_kxmid3:	.zero	3
 _cam_kzmid3:	.zero	3
 _cam_lod_rect:	.zero	3
-_cam_lod_pix:	.zero	3
+_cam_fog:	.zero	3
 .Lroom:		.zero	1			; boxes out[] still has room for
 .Lvars_end:
 	.if	.Lvars_end - .Lvars != V_SIZE || V_SIZE > 128
@@ -770,12 +941,22 @@ _cam_lod_pix:	.zero	3
 	.if	_cam_kxmid3 - .Lvars != V_CAM_KXMID3 || _cam_kzmid3 - .Lvars != V_CAM_KZMID3
 	.error	"V_CAM_KXMID3 or V_CAM_KZMID3 does not match .Lvars"
 	.endif
-	.if	_cam_lod_rect - .Lvars != V_CAM_LODRECT || _cam_lod_pix - .Lvars != V_CAM_LODPIX
-	.error	"V_CAM_LODRECT or V_CAM_LODPIX does not match .Lvars"
+	.if	_cam_lod_rect - .Lvars != V_CAM_LODRECT || _cam_fog - .Lvars != V_CAM_FOG
+	.error	"V_CAM_LODRECT or V_CAM_FOG does not match .Lvars"
 	.endif
 	.if	.Lroom - .Lvars != V_ROOM
 	.error	"V_ROOM does not match .Lvars"
 	.endif
+
+; near-plane clipping (.Lgen_clip): the corners {x, z}, then the clipped ones (24 bytes on)
+.Lcorn:		.zero	24
+.Lclp:		.zero	24
+.Lnb_z:		.zero	3			; .Lclip_one: the neighbours of the corner
+.Lnb_x:		.zero	3
+.Lnb_d:		.zero	3
+.Lclip_lb:	.zero	3
+.Lclip_p:	.zero	3			; .Lgen_clip: the next clipped corner, corners left
+.Lclip_n:	.zero	1
 
 ; Faces of a box towards the camera by the grid index of each axis (camera.c, cameraInit):
 ; three consecutive pages, so inc h steps from one to the next

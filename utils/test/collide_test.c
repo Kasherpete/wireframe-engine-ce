@@ -59,7 +59,11 @@ static void num(uint8_t x, uint8_t y, const char *s, int24_t v) {
 }
 
 int main(void) {
-    if (!worldStart()) return 0;
+    if (!windowAlloc()) return 0;
+    if (!worldStart()) {
+        windowFree();
+        return 0;
+    }
     coloursInit();
     playerSpawn();
     hudInit();
@@ -149,5 +153,6 @@ int main(void) {
         swapBuffer();
     }
     gfx_End();
+    windowFree();
     return 0;
 }

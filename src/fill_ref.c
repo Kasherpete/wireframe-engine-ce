@@ -5,6 +5,8 @@
 
 #include <stdint.h>
 #include "engine.h"
+#include "chunks.h"
+#include "display.h"
 #include "fill.h"
 
 #define ROW      320            // bytes per graphx row
@@ -19,10 +21,10 @@ typedef struct {
 } span_t;
 // The span list and the intervals live in DBL_BUF2 above the exposure grid of chunks.c (the
 // bench uses one at a time): bss has no room for them next to the chunks
-#define SPAN_LIST_REF 0xD60E00
+#define SPAN_LIST_REF (DBL_BUF2 + DBL_BUF2_FREE)   // chunks.h: no chunks there with FILL_REFERENCE
 #define GAP_X0_REF    (SPAN_LIST_REF + SPAN_MAX * 5)
 #define GAP_X1_REF    (GAP_X0_REF + VIEW_H * GAP_MAX)
-_Static_assert(GAP_X1_REF + VIEW_H * GAP_MAX <= 0xD65800, "the reference arrays must fit DBL_BUF2");
+_Static_assert(GAP_X1_REF + VIEW_H * GAP_MAX <= DBL_BUF2_END, "the reference arrays must fit DBL_BUF2");
 #define span_list ((span_t *)SPAN_LIST_REF)
 static span_t *span_end;
 
@@ -51,6 +53,17 @@ static void emit(uint8_t y, uint8_t x0, uint8_t x1, uint8_t colour) {
     span_end->len = x1 - x0;
     span_end->colour = colour;
     span_end++;
+}
+
+// the background colour of row y (fill.h, bg_rows)
+static uint8_t bgColour(uint8_t y) {
+    if (y < bg_rows[0]) {
+        return SKY_COLOUR;
+    }
+    if (y < bg_rows[0] + bg_rows[1]) {
+        return (uint8_t)bg_dither3;
+    }
+    return (uint8_t)ground_colour3;
 }
 
 // at most GAP_MAX + 1 spans per row and face
@@ -125,7 +138,7 @@ static void coverRow(uint8_t y, uint8_t xl, uint8_t xr, uint8_t colour) {
                     g1s[n] = g1;
                     n++;
                 } else {
-                    emit(y, b, g1, y < CENTRE_Y ? SKY_COLOUR : (uint8_t)ground_colour3);  // see fill.S
+                    emit(y, b, g1, bgColour(y));  // see fill.S
                 }
                 break;
             }
@@ -266,7 +279,7 @@ void fillSceneRef(const projected_box_t *boxes, uint24_t n, uint24_t base) {
     for (uint8_t y = 0; y < VIEW_H; y++) {
         roomForRow();
         for (uint8_t i = 0; i < gap_n[y]; i++) {
-            emit(y, gap_x0[y][i], gap_x1[y][i], y < CENTRE_Y ? SKY_COLOUR : (uint8_t)ground_colour3);
+            emit(y, gap_x0[y][i], gap_x1[y][i], bgColour(y));
         }
     }
 }

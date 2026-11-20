@@ -27,8 +27,13 @@ int main(void) {
         kb_Scan();
     }
 
-    // the world file first: on an error there is nothing to show
+    // the chunk memory (a scratch AppVar: created before the world is opened, as creating a
+    // variable may move it), then the world file: on an error there is nothing to show
+    if (!windowAlloc()) {
+        return 0;
+    }
     if (!worldStart()) {
+        windowFree();
         return 0;
     }
     coloursInit();
@@ -106,9 +111,11 @@ int main(void) {
         frame_cycles = CYCLES() - frame_start - wait_cycles;
     }
 
-    // The world's last played date last: archiving it may show the OS garbage collection screen
+    // The world's last played date last: archiving it may show the OS garbage collection screen,
+    // and it needs free RAM, so the scratch AppVar goes first
     kb_SetMode(kb_mode);
     gfx_End();
+    windowFree();
     worldClose();
     return 0;
 }

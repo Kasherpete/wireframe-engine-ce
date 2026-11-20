@@ -1,5 +1,8 @@
 // The chunk window (chunks.h): loading, painter's sort, exposure.
 #include <string.h>
+#include <fileioc.h>
+#include <ti/screen.h>
+#include <ti/getcsc.h>
 
 #include "chunks.h"
 #include "camera.h"
@@ -7,7 +10,11 @@
 #include "display.h"
 #include "hud.h"
 
-static chunk_t chunks[WINDOW_N];     // chunk (cx, cz) lives in slot (cx mod 5) * 5 + (cz mod 5)
+// chunk (cx, cz) lives in slot (cx mod 7) * 7 + (cz mod 7). The first CHUNKS_BSS slots are in
+// bss, the next CHUNKS_VRAM in DBL_BUF2, the rest in the scratch AppVar (windowAlloc)
+static chunk_t  chunks_bss[CHUNKS_BSS];
+static chunk_t *slot[WINDOW_N];
+static uint8_t  scratch_handle;
 chunk_t *win[WINDOW_N];
 int24_t  win_cx, win_cz;
 uint8_t  visit_order[WINDOW_N];
@@ -115,8 +122,8 @@ static void loadChunk(chunk_t *ch, int24_t cx, int24_t cz) {
 #define OCC          ((uint8_t *)DBL_BUF2)
 #define OCC_LAYERS   (WORLD_Y_MAX - WORLD_Y_MIN + 3)          // y: a chunk's range, plus one each side
 _Static_assert(OCC_ROW == CHUNK_SIZE + 2 && OCC_LAYER == OCC_ROW * OCC_ROW, "x and z: -1 .. 8");
-// (fill_ref.c keeps its span list in DBL_BUF2 from 0x4C00 on)
-_Static_assert(OCC_ROW + 1 + OCC_LAYERS * OCC_LAYER <= 0x4C00, "the occupancy grid must fit the start of DBL_BUF2");
+// (DBL_BUF2 from DBL_BUF2_FREE on holds chunks, or in the bench fill_ref.c's span list)
+_Static_assert(OCC_ROW + 1 + OCC_LAYERS * OCC_LAYER <= DBL_BUF2_FREE, "the occupancy grid must fit the start of DBL_BUF2");
 
 // occ_layer[L]: the address of cell (x 0, layer L, z 0), so cell (x, L, z) is at
 // occ_layer[L] + OCC_ROW z + x for x and z from -1 to CHUNK_SIZE. Layer L is Y - ymin + 1.
@@ -191,6 +198,50 @@ void computeExposure(uint8_t w) {
 
 // ---- the window ----
 
+#define SCRATCH_SIZE  ((WINDOW_N - CHUNKS_BSS - CHUNKS_VRAM) * sizeof(chunk_t))
+_Static_assert(SCRATCH_SIZE < 65000, "an AppVar holds at most 65505 bytes");
+_Static_assert(DBL_BUF2_FREE + CHUNKS_VRAM * sizeof(chunk_t) <= DBL_BUF2_END - DBL_BUF2, "the chunks must fit DBL_BUF2");
+#ifndef FILL_REFERENCE
+_Static_assert(SCRATCH_SIZE <= 15 * 1024, "the message below");
+#endif
+
+// The AppVar's data pointer stays valid as long as no variable is created, deleted, resized or
+// (un)archived: nothing does that between here and windowFree. The VRAM slots are only written
+// from windowInit on, after displayInit has shown DBL_BUF2 for the last time
+uint8_t windowAlloc(void) {
+    scratch_handle = ti_Open(CHUNKS_APPVAR, "w");
+    if (scratch_handle && ti_Resize(SCRATCH_SIZE, scratch_handle) == (int)SCRATCH_SIZE) {
+        chunk_t *p = ti_GetDataPtr(scratch_handle);
+        chunk_t *vram = (chunk_t *)(DBL_BUF2 + DBL_BUF2_FREE);
+        for (uint8_t i = 0; i < WINDOW_N; i++) {
+            if (i < CHUNKS_BSS) {
+                slot[i] = &chunks_bss[i];
+            } else if (i < CHUNKS_BSS + CHUNKS_VRAM) {
+                slot[i] = vram++;
+            } else {
+                slot[i] = p++;
+            }
+        }
+        return 1;
+    }
+    windowFree();
+    os_ClrHome();
+    os_PutStrFull("Not enough free RAM: the");
+    os_NewLine();
+    os_PutStrFull("chunks need 15 KB");
+    while (!os_GetCSC()) {
+    }
+    return 0;
+}
+
+void windowFree(void) {
+    if (scratch_handle) {
+        ti_Close(scratch_handle);
+        scratch_handle = 0;
+    }
+    ti_Delete(CHUNKS_APPVAR);
+}
+
 void windowInit(void) {
     initGridDist();
     initOccupancy();
@@ -206,13 +257,13 @@ void windowInit(void) {
         }
     }
     for (uint8_t i = 0; i < WINDOW_N; i++) {
-        chunks[i].cx = CHUNK_NONE;
+        slot[i]->cx = CHUNK_NONE;
     }
     win_cx = CHUNK_NONE;
 }
 
-// v mod 5 in 0 .. 4 (a division: once per axis and window update)
-static uint8_t mod5(int24_t v) {
+// v mod WINDOW in 0 .. WINDOW - 1 (a division: once per axis and window update)
+static uint8_t modWindow(int24_t v) {
     const int24_t m = v % WINDOW;
     return (uint8_t)(m < 0 ? m + WINDOW : m);
 }
@@ -220,12 +271,12 @@ static uint8_t mod5(int24_t v) {
 static void updateWindow(int24_t cx, int24_t cz) {
     PROF(const uint24_t t = CYCLES();)
     uint8_t w = 0;
-    const uint8_t mx0 = mod5(cx - WINDOW_HALF);
-    uint8_t mz = mod5(cz - WINDOW_HALF);
+    const uint8_t mx0 = modWindow(cx - WINDOW_HALF);
+    uint8_t mz = modWindow(cz - WINDOW_HALF);
     for (int24_t dz = -WINDOW_HALF; dz <= WINDOW_HALF; dz++) {
         uint8_t mx = mx0;
         for (int24_t dx = -WINDOW_HALF; dx <= WINDOW_HALF; dx++, w++) {
-            chunk_t *ch = &chunks[mx * WINDOW + mz];
+            chunk_t *ch = slot[(mx << 3) - mx + mz];  // mx * WINDOW
             if (++mx == WINDOW) {
                 mx = 0;
             }
@@ -260,5 +311,6 @@ chunk_t *windowChunk(int24_t cx, int24_t cz) {
     if (dz < 0 || dz >= WINDOW) {
         return NULL;
     }
-    return win[(dz << 2) + dz + dx];       // dz * WINDOW without a library multiply
+    _Static_assert(WINDOW == 7, "dz * WINDOW below");
+    return win[(dz << 3) - dz + dx];       // dz * WINDOW without a library multiply
 }

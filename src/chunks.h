@@ -1,12 +1,18 @@
-// The chunk window: the 5 x 5 chunks around the camera, in RAM.
+// The chunk window: the 7 x 7 chunks around the camera, in RAM.
 //
 // The world file (world.h) is split into chunk columns of CHUNK_SIZE x CHUNK_SIZE cells, of any
 // height. The chunks around the camera's chunk are kept as records {x, Y, z, material, exposed
 // FACE_*} that projectRecords (project.S) reads directly: x and z are local to the chunk (0 .. 7),
 // Y is the world y cell + 1 (the voxel spans [Y-1, Y], y down). When the camera moves into another
 // chunk, windowFollow() loads the chunks that came into the window over the ones that left it.
-// With the far plane at GRID_RANGE = 16 cells and the camera anywhere in the centre chunk, every
+// With the far plane at GRID_RANGE = 24 cells and the camera anywhere in the centre chunk, every
 // cell within the far plane is in the window.
+//
+// Memory: 49 chunks of 1300 bytes do not fit in bss. CHUNKS_BSS of them are in bss, CHUNKS_VRAM in
+// the spare VRAM frame DBL_BUF2 after the occupancy grid (not shown after displayInit), the rest in
+// a scratch AppVar (CHUNKS_APPVAR, 14.3 KB) that windowAlloc() creates before the world is opened
+// (creating a variable may move the world AppVar if it is in RAM) and windowFree() deletes before
+// worldClose.
 //
 // ---- painter's order ----
 // Boxes are drawn near to far by their Manhattan distance in grid cells from the camera's cell,
@@ -34,8 +40,8 @@
 #include "engine.h"
 #include "world.h"
 
-#define WINDOW       5               // chunks per side of the window
-#define WINDOW_HALF  2
+#define WINDOW       7               // chunks per side of the window
+#define WINDOW_HALF  3
 #define WINDOW_N     (WINDOW * WINDOW)
 #define CHUNK_NONE   0x7fffff        // chunk_t.cx of a slot nothing was loaded into
 
@@ -61,15 +67,33 @@ typedef struct {
     int8_t  rec[CHUNK_MAX][5];       // {x, Y, z, material, exposed FACE_*}
 } chunk_t;
 
-extern chunk_t *win[WINDOW_N];         // the chunk at window position (dz + 2) * 5 + (dx + 2)
+#define CHUNKS_BSS     24                       // chunk slots in bss
+#ifdef FILL_REFERENCE
+#define CHUNKS_VRAM    0                        // the bench's fill_ref.c keeps its lists there
+#else
+#define CHUNKS_VRAM    14                       // chunk slots in DBL_BUF2 from DBL_BUF2_FREE
+#endif
+#define DBL_BUF2_FREE  0x4C00                   // DBL_BUF2 from here on: chunks (or fill_ref.c)
+#define CHUNKS_APPVAR  "VXSCRTCH"               // the scratch AppVar for the others (deleted on exit)
+
+extern chunk_t *win[WINDOW_N];         // the chunk at window position (dz + 3) * 7 + (dx + 3)
 extern int24_t  win_cx, win_cz;        // the chunk the window is centred on
 extern uint8_t  visit_order[WINDOW_N]; // window positions by distance from the centre, nearest first
 
-// the sort tables, the occupancy grid and an empty window (nothing loaded). After displayInit
+// Creates the scratch AppVar for the chunk slots that are not in bss. Before worldStart (so the world
+// does not move after it is opened) and before graphx starts: on failure (not enough free RAM) it
+// says so on the home screen, waits for a key and returns 0
+uint8_t windowAlloc(void);
+
+// Deletes the scratch AppVar. After gfx_End, before worldClose (which may need the RAM)
+void windowFree(void);
+
+// the sort tables, the occupancy grid and an empty window (nothing loaded). After displayInit and
+// windowAlloc
 void windowInit(void);
 
 // Centres the window on the camera's chunk (setupCamera has run), loading the chunks that are new
-// in it: all 25 at startup or after a jump, 5 when crossing a chunk border
+// in it: all 49 at startup or after a jump, 7 when crossing a chunk border
 void windowFollow(void);
 
 // The chunk (cx, cz) if it is in the window, else NULL

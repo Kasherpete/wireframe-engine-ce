@@ -74,7 +74,7 @@ static void cullChunks(void) {
             uint8_t v = 1;
             if (z1 < NEAR_PLANE) {
                 v = 0;                      // behind the camera
-            } else if (z0 >= FAR_PLANE) {
+            } else if (z0 >= cam_far) {
                 v = 0;
             } else if ((x1 << 2) + z5 < 0) {
                 v = 0;                      // left of the view: 4 x1 < -5 z1

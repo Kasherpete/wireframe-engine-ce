@@ -6,16 +6,16 @@ Voxel 3D renderer (filled, shaded faces, hidden surface removal) for the TI-84 P
 |---|---|
 | `src/main.c` | `main`: startup and the frame loop, nothing else |
 | `src/display.{h,c}` | 4bpp setup (`displayInit`), VRAM frame addresses, `swapBuffer`, `waitForBufferScan`, full-frame de-interlace (startup) |
-| `src/colours.{h,c}` | `palette`, `materials[]`, `ground_colour3` (`coloursInit`) |
+| `src/colours.{h,c}` | `palette`, `materials[]` (plain, then fogged), `ground_colour3`, `bg_rows` (`coloursInit`) |
 | `src/player.{h,c}` | player state, keys, movement, jump/crouch, collision response (`playerSpawn`, `playerUpdate`) |
 | `src/collide.{h,c}`, `collide.S` | collision: occupancy bit grid around the player (`collideBuild`, C), `collideBody` and `collideMark` (asm) |
-| `src/camera.{h,c}`, `camera.S` | `setupCamera` (per-frame state for `project.S`), face tables (`cameraInit`), LOD distances; `fillRotTable` (asm) |
-| `src/chunks.{h,c}` | chunk window (`windowInit`, `windowFollow`, `windowChunk`), `sortChunk`, `computeExposure`, painter's-order notes |
+| `src/camera.{h,c}`, `camera.S` | `setupCamera` (per-frame state for `project.S`, fog bands), face tables (`cameraInit`), `lod_rect_dist`, `render_dist`, `fog_dist`; `fillRotTable` (asm) |
+| `src/chunks.{h,c}` | chunk window (`windowAlloc`/`windowFree`: chunk memory, `windowInit`, `windowFollow`, `windowChunk`), `sortChunk`, `computeExposure`, painter's-order notes |
 | `src/scene.{h,c}` | `projected[]`, `cullChunks`, `projectScene`, LOD colour table (`sceneInit`) |
 | `src/hud.{h,c}` | `make hud` only: HUD, `CYCLES()`/`PROF()` and the profiling counters |
 | `src/world.{h,c}` | world file (AppVar): format structs, `worldOpen` (CRC, range checks), `worldStart` (open or report), chunk lookup, `worldClose` |
 | `src/chunk.S` | per-voxel loops of chunk loading and exposure |
-| `src/project.S` | `projectRecords`: per-record culling, facing test, projection, level of detail |
+| `src/project.S` | `projectRecords`: per-record culling, facing test, projection, near-plane clipping, level of detail, fog |
 | `src/fill.S`, `fill.h` | filled rasterizer with hidden surface removal; its header comment is the detailed description |
 | `src/fill_ref.c` | same rasterizer in C, only with `-DFILL_REFERENCE`, to verify `fill.S` |
 | `src/deinterlace.S` | `deinterlaceRows`: plain row copy (startup only; per frame it is `deinterlaceFrame` in `fill.S`) |
@@ -37,11 +37,13 @@ Voxel 3D renderer (filled, shaded faces, hidden surface removal) for the TI-84 P
 ```sh
 make          # release -> bin/DEMOPRGM.8xp, also builds bin/WORLD.8xv (needed at runtime)
 make hud      # plus on-screen HUD (FPS, D/F timings)
-make debug    # -O0, dbg_printf enabled (combine: make debug hud)
+make fog      # distance fog variant -> bin/DEMOFOG.8xp (FOG_BUILD; both can be on the calculator)
+make debug    # -O0, dbg_printf enabled (combine: make debug hud, make fog hud)
 ```
 
 - The build must have no warnings. `GFX_LCD_WIDTH/HEIGHT` are `#undef`ed before redefinition; the makefile passes `--no-warn-execstack`.
-- The variant is written to `obj/variant`, so switching rebuilds C files. `.S` files don't depend on it: don't use `SHOW_HUD`/`DEBUG` there.
+- The variant is written to `obj/variant`, so switching rebuilds C files. `.S` files don't depend on it: don't use `SHOW_HUD`/`DEBUG`/`FOG_BUILD` there (fog reaches `project.S` as the runtime value `cam_fog`).
+- `.S` objects don't track the headers they include either: after changing `engine.h`, `projection_tables.h` (`gen_tables.py`), `chunks.h` or `fill.h`, `make clean`, or a stale object links (an old `camera.S` built for range 16 silently produced wrong rotation tables).
 - `.S` files go through the C preprocessor, then the GNU z80 assembler. Keep `;` comments free of apostrophes, and shared `#define` values must not start with `(` (read as a memory load).
 - After adding or removing a header, `make clean`.
 - CEdev v15 at `~/CEdev`; needs ez80-clang v22+.
@@ -51,6 +53,7 @@ make debug    # -O0, dbg_printf enabled (combine: make debug hud)
 ```sh
 utils/run_cemu.sh                                     # -> /tmp/cemu_run/t01..t12.png
 SHOTS=6 KEYS='"key|right"' utils/run_cemu.sh bin/DEMOPRGM.8xp /tmp/out
+utils/run_cemu.sh bin/DEMOFOG.8xp /tmp/fog            # the fog build (the on-calc name is the file name)
 ```
 
 - Boots a clean calculator, sends `clibs.8xg`, the world, arTIfiCE (TI-OS 5.8 blocks native ASM otherwise) and the program, and screenshots every 2 s. Inputs: `~/Downloads/ROM_IMAGE_2.rom`, `clibs.8xg`, `arTIfiCE_v2.1.8xp` (override with `CEMU_ROM`, `CEMU_CLIBS`, `CEMU_ARTIFICE`; `FILES=` sends no world).
@@ -68,12 +71,13 @@ The LCD is in 4bpp mode (`lcd_Control = 0x13925`), but graphx draws as if 8bpp 3
 - One graphx row (320 bytes) is two LCD rows; a frame is 120 graphx rows. Bytes 0-159 of a row are the top LCD row, 160-319 the row below. Each byte is 2 horizontal pixels (nibbles).
 - So graphx sees a **logical 160x120 screen**; `GFX_LCD_WIDTH`/`HEIGHT` are redefined to 160/120 on purpose, `GFX_WIDTH_HALF`/`HEIGHT_HALF` are 80/60.
 - **Colours are doubled nibbles** (`0x33` = palette entry 3 twice; mixed bytes dither). 16 colours: `palette` in `colours.c` (PICO-8 style).
+- Background: sky above the horizon (row `CENTRE_Y`), ground below, as three bands of rows `bg_rows` (`fill.h`): sky colour, `bg_dither3`, `ground_colour3`. Without fog `{60, 0, 60}`; the fog build moves the ground beyond the far plane into the first band and dithers the ground beyond `fog_dist` (`setupCamera`, `fill_ref.c` matches).
 - graphx only draws the even LCD rows; each frame `deinterlaceFrame` (`fill.S`) copies them to the odd rows, one `ldir` per row (~1.3k cycles), except rows nothing was drawn in: `drawSpans` fills both LCD rows of those with background by `push` (320 bytes, ~0.5k more than 160). About 40% of rows in a walk; the first `HUD_ROWS` rows are always copied (HUD text is drawn after `drawSpans`). A drawing-one-field interlaced mode was removed (commit 8f3d1e3) because it combed while moving.
 - **Viewport** is the whole logical screen (`SCREEN_OFFSET` 0, `VIEWPORT_LENGTH` 160). A narrower one needs `fillSideBars` and a changed `VIEW_HALF_WIDTH` in `gen_tables.py`. Always compare screen x against `SCREEN_OFFSET` and `SCREEN_OFFSET + VIEWPORT_LENGTH`, never `0`/`VIEWPORT_LENGTH`.
 
 ## VRAM layout (custom; don't use graphx's buffer helpers)
 
-VRAM 0xD40000-0xD657FF is four 38,400-byte (0x9600) 4bpp frames: `BUFFER_1`, `BUFFER_2` (swapped each frame), `DBL_BUF1` (`fill.S` span list, nothing else may use it), `DBL_BUF2` (blank frame during `displayInit`, then scratch: bytes 0-0x4BFF hold `computeExposure`'s occupancy grid, so chunks load only after `displayInit`; from 0x4C00 the bench's `fill_ref.c` span list).
+VRAM 0xD40000-0xD657FF is four 38,400-byte (0x9600) 4bpp frames: `BUFFER_1`, `BUFFER_2` (swapped each frame), `DBL_BUF1` (`fill.S` span list, nothing else may use it), `DBL_BUF2` (blank frame during `displayInit`, then scratch: bytes 0-0x4BFF hold `computeExposure`'s occupancy grid; from `DBL_BUF2_FREE` (0x4C00) 14 chunk slots, or with `-DFILL_REFERENCE` the bench's `fill_ref.c` lists instead. So chunks load only after `displayInit`).
 
 - `draw_buffer_ctrl` is `lcd_LpBase` (where graphx draws); `screen_buffer_ctrl` is `lcd_UpBase` (scanned out). `swapBuffer()` swaps them.
 - No pre-rendered background: `drawSpans` fills sky/ground every frame (`SKY_COLOUR`, `GROUND_COLOUR`).
@@ -83,7 +87,7 @@ VRAM 0xD40000-0xD657FF is four 38,400-byte (0x9600) 4bpp frames: `BUFFER_1`, `BU
 
 1. `dt` from `clock()` (32768 ticks/s, clamped to 1/8 s); FPS every second.
 2. `playerUpdate(dt)`: keys -> `updateMotion()` (movement and collision). The keypad is in continuous scan mode, so `kb_Data` is always current; never call `kb_Scan()` (~62k cycles).
-3. `setupCamera()`, then `windowFollow()` (`updateWindow` loads chunks that entered the window).
+3. `setupCamera()` (fog build: also the background bands, two divisions), then `windowFollow()` (`updateWindow` loads chunks that entered the window).
 4. `projectScene()`: `cullChunks`, then per visible chunk nearest first: `sortChunk` if stale, `projectRecords`. Then `fillScene()` writes spans front to back. Neither touches a frame buffer, so both run before the wait and overlap the LCD showing the last frame. Anything not touching the back buffer belongs here.
 5. `waitForBufferScan()` waits for `lcd_IntStatus` bit 2 ("next base update"), which `swapBuffer` clears right after writing the new base.
    - Don't poll `lcd_UpBaseCurr` instead: it stops changing while the LCD is idle, so frames under ~5 ms swapped twice per refresh and drew into the displayed buffer.
@@ -107,22 +111,26 @@ VRAM 0xD40000-0xD657FF is four 38,400-byte (0x9600) 4bpp frames: `BUFFER_1`, `BU
 ## Camera and projection
 
 - Camera space: x right, y down, z forward. Yaw only, no pitch. A box at world (X, Y, Z) occupies [X-1, X]x[Y-1, Y]x[Z-1, Z].
-- **Render distance 16** (`RENDER_DIST` in `gen_tables.py` = `GRID_RANGE`, the far plane): the 5x5 chunk window covers it from anywhere in the centre chunk (static-asserted in `chunks.h`).
+- **Render distance 24** (`RENDER_DIST` in `gen_tables.py` = `GRID_RANGE`, the farthest far plane the tables allow): the 7x7 chunk window reaches 24 cells to each side from anywhere in the centre chunk (static-asserted in `chunks.h`). The far plane is a depth: the view reaches 1.25 x 24 = 30 cells to each side there, so the far corners of the view can lack the outer chunk ring (the 5x5 window at 16 had the same gap: 20 cells).
+  - `render_dist` (`camera.c`, default `GRID_RANGE`) lowers it at runtime: `setupCamera` turns it into `cam_zspan` and `cam_far` (`cullChunks`). The table proof holds for any nearer far plane.
 - **True 1/z perspective**: `screen = centre + 64 * a / z` (horizontal |x| <= 1.25 z, vertical |y| <= 0.94 z).
 - **Units:** camera space is in 1/`SUB` (128) world units, and every value shared with `project.S` is stored **x3** (an `int24_t` table entry is 3 bytes, so a x3 value is a byte offset). Per-frame values must stay exact multiples of 3 (`fillRotTable` in `camera.S` builds them unscaled, then triples; it matches the old C version exactly over all 131k inputs).
 - **Rotation, per frame** (`setupCamera`): per grid line within `GRID_RANGE` of the camera cell, tables of `(line - player) * cos/sin`, built by repeated addition, interleaved as `rotX_ = {XC, XS}`, `rotZ_ = {ZS, ZC}`. A grid point is `x' = XC - ZS`, `z' = XS + ZC`; the other three box corners are fixed per-frame offsets (`cam_k*3`, `cam_k*mid3`). Full list of per-frame state in `engine.h`.
 - **Projection** (`projectRecords`): `64 * a / z = expTable[logTable[|a|] - logTable[z] - EXP_TABLE_MIN]` (logTable entries are x3 too, so the difference is a byte offset).
   - Per record, cheapest rejection first: exposed byte, x/z grid lookups and depth test, side tests, y lookup and above/below tests, then facing test. Most records are culled, so the order matters.
   - Grid index is checked in 16 bits (`GRID_INDEX`): record byte sign-extended plus the camera bias patched into an `ld de, nn`.
-  - IX points at `.Lvars` (locals, loop state, per-frame camera scalars `cam_cos3` ... `cam_lod_pix` written by `setupCamera`), addressed as `(ix + V_*)`. The `V_*` offsets are `#define`s (the assembler won't take a later label difference as a displacement); `.if` checks at the end of the file fail the assembly if they stop matching or the block exceeds 128 bytes. IY points at the record, then the rotation tables, then the box's `projected[]` slot.
+  - IX points at `.Lvars` (locals, loop state, per-frame camera scalars `cam_cos3` ... `cam_fog` written by `setupCamera`), addressed as `(ix + V_*)`. The `V_*` offsets are `#define`s (the assembler won't take a later label difference as a displacement); `.if` checks at the end of the file fail the assembly if they stop matching or the block exceeds 128 bytes. IY points at the record, then the rotation tables, then the box's `projected[]` slot.
   - **Self-modifying code:** camera biases are patched into the face test's `add a, n` and the grid index's `ld de, nn` once per call.
   - `face_x/y/z` are three consecutive 1024-aligned pages in `project.S`'s bss (`inc h` steps between them).
-- **Culling** is in camera space before projecting: the farthest corner nearer than `NEAR_PLANE` (0.5) or at/beyond `FAR_PLANE`, the box left/right of `|x| <= 1.25 z` (tested as 4x vs 5z), or above/below `|y| <= z`. A box straddling the near plane is not clipped: each corner nearer than `NEAR_PLANE` is projected at `NEAR_PLANE` (`LOG_ZC`), so it stretches over the screen instead of vanishing.
-- **The culling bounds every table index.** `gen_tables.py` asserts that any box passing these exact tests has all logTable/expTable indices in range, so `project.S` has no range checks, and projected coordinates stay within ~+-570. **If you change the culling, change the generator's proof with it.**
+- **Culling** is in camera space before projecting: the farthest corner nearer than `NEAR_PLANE` or at/beyond the far plane, the box left/right of `|x| <= 1.25 z` (tested as 4x vs 5z), or above/below `|y| <= z`.
+- **Near plane** `NEAR_PLANE` = 23/128 (0.18). The eye stays `BODY_RADIUS` (0.3) from walls, and a wall at distance d is at least d / 1.6 deep where the side of the view meets it, so a nearer plane never cuts a wall the player touches (static-asserted in `camera.c`). With the old 0.5 (and the box culled by its *nearest* corner) a wall the camera was pressed against vanished.
+  - The part of a box nearer than `NEAR_PLANE` is clipped. Facing N/E/S/W the near face is moved to `NEAR_PLANE` (`LOG_ZC`): exact. At other yaws (`.Lgen_clip`, a few boxes per frame at most) each corner behind it is moved along a box edge to a corner in front, to depth `NEAR_PLANE`, preferring the edge of a visible side: `|dx| a / b` through the log/exp tables. Exact for the sides unless a corner between two visible sides is behind (one of them loses a sliver at the screen edge); a top or bottom may lose a corner triangle. Checked against a C model (exact division) over 300 random camera states, a third pressed against a cell face: 0 mismatches, at most 2 px.
+- **The culling bounds every table index.** `gen_tables.py` asserts that any box passing these exact tests has all logTable/expTable indices in range (clipped points included: they lie in the box footprint at `NEAR_PLANE`), so `project.S` has no range checks, and projected coordinates stay within `SCREEN_COORD_MAX` (+-1221: 64 x the widest footprint over `NEAR_PLANE`). **If you change the culling, change the generator's proof with it.**
   - `CULL_X_NUM / CULL_X_DEN` must equal `VIEW_HALF_WIDTH / FOCAL_LENGTH`; `project.S` hard-codes 5/4 and `#error`s on change.
-- **Level of detail.** A box whose nearest corner is at least `lod_rect_dist` deep (`LOD_RECT_DIST` = 12) becomes `BOX_RECT`: the rectangle of its x/y extent at its centre depth (4 projections, one rectangle in `fill.S`). From `lod_pixel_dist` (24) it is a 2x2 pixel block at its centre (2 projections). A value at or beyond the far plane turns a level off. Both are variables in `camera.c`, read every frame.
+- **Level of detail.** A box whose nearest corner is at least `lod_rect_dist` deep (`LOD_RECT_DIST` = 12, at least 1) becomes `BOX_RECT`: the rectangle of its x/y extent at its centre depth (4 projections, one rectangle in `fill.S`). At or beyond the far plane it is off. A variable in `camera.c`, read every frame. (A 2x2 pixel level from 24 units was removed.)
   - The colour is a visible side if any: `.Llod_side` keeps only the x or z side pointing most at the camera *position* (larger of |dx|, |dz| by `gridDist`; z on a tie), so it doesn't change while turning. `lod_slot` is a fixed table (`sceneInit`). Voxels at y cell 0 are never LOD boxes.
-- **Regenerating tables:** edit the constants atop `utils/gen_tables.py` (`SUBUNITS`, `FOCAL_LENGTH`, `VIEW_HALF_WIDTH`, `RENDER_DIST`, `NEAR_PLANE`, `LOG_STEPS`...) and run `python3 utils/gen_tables.py`. `RENDER_DIST` must be at most `WINDOW_HALF * CHUNK_SIZE` (16); more needs a bigger window, which needs more bss than exists. The log table grows ~480 bytes per unit.
+- **Fog** (`make fog`, `FOG_BUILD`): a box whose centre is at least `fog_dist` deep (`FOG_DIST` = 16; the `cam_fog` test in `project.S` is ~15 bytes, ~60 cycles, per kept box in every build) gets material + `MAT_FOGGED` (16): `materials[16..31]` are each colour byte with one nibble replaced by the sky colour (a 50% dither; the z side takes the x side's shade). The ground between `fog_dist` and the far plane is dithered the same way and the ground beyond it is sky colour (`bg_rows`), so boxes crossing the far plane fade out. Depth, not distance, as the far plane is. Release builds set `cam_fog` beyond any box. Cost: two divisions per frame (~5k cycles), nothing measurable in the scene.
+- **Regenerating tables:** edit the constants atop `utils/gen_tables.py` (`SUBUNITS`, `FOCAL_LENGTH`, `VIEW_HALF_WIDTH`, `RENDER_DIST`, `NEAR_PLANE`, `LOG_STEPS`...), run `python3 utils/gen_tables.py`, then `make clean`. `RENDER_DIST` must be at most `WINDOW_HALF * CHUNK_SIZE` (24); more needs a 9x9 window (81 chunks). `camera.S` hard-codes `GRID_RANGE` 24. The log table grows ~480 bytes per unit; a nearer `NEAR_PLANE` grows `recipTable` and `expTable` (wider projected coordinates) and needs a lower `LOG_ZERO`.
 
 ## Clipping conventions
 
@@ -137,20 +145,21 @@ VRAM 0xD40000-0xD657FF is four 38,400-byte (0x9600) 4bpp frames: `BUFFER_1`, `BU
 - **Exposed faces are in the file** (computed by `make_world.py`: ground solid, outside the world empty), so loading is a copy. `computeExposure` is for runtime changes and must agree with the generator (the bench checks the inner 3x3 chunks after each load).
 - `worldOpen` (before graphx starts) checks header, CRC, every chunk offset and every voxel's range, so nothing later does. Bounds that matter: x + 8 z < 64, y in -96...95, material < 16, faces < 64. On error `worldStart` prints it, waits for a key and `main` exits.
 - `worldClose` (after `gfx_End`) writes the RTC date as last played and updates the CRC; an archived world is unarchived and re-archived (needs free RAM the size of the world; may show the OS garbage collection screen).
-- **Chunks:** columns of 8x8 cells, any height, at most 255 voxels. RAM holds a 5x5 window: `chunks[25]` (slot `(cx mod 5) * 5 + (cz mod 5)`), `win[25]` by window position. Records are 5 bytes {x, Y, z, material, exposed}, x/z chunk local, Y = y cell + 1. A chunk's grid index bias is `cam_bias_x + 8 cx + 1`, passed to `projectRecords` and `sortRecords`.
-- `updateWindow` copies the chunks new to the window (`copyVoxels`): all 25 at startup or a jump, 5 when crossing a chunk border.
+- **Chunks:** columns of 8x8 cells, any height, at most 255 voxels. RAM holds a 7x7 window: 49 slots of 1300 bytes (slot `(cx mod 7) * 7 + (cz mod 7)`, pointers in `slot[]`), `win[49]` by window position. Slots 0-23 are in bss, 24-37 in `DBL_BUF2` (VRAM), 38-48 in the scratch AppVar `VXSCRTCH` (14.3 KB). Records are 5 bytes {x, Y, z, material, exposed}, x/z chunk local, Y = y cell + 1. A chunk's grid index bias is `cam_bias_x + 8 cx + 1`, passed to `projectRecords` and `sortRecords`.
+- `windowAlloc` (before `worldStart`: creating a variable may move the world AppVar if it is in RAM, and before graphx: on failure it prints "Not enough free RAM" and `main` exits) creates the AppVar and sets the slot pointers; `windowFree` deletes it after `gfx_End`, before `worldClose`. Harness `main`s (bench, collision test) call both.
+- `updateWindow` copies the chunks new to the window (`copyVoxels`): all 49 at startup or a jump (~1.2M cycles in the dense world), 7 when crossing a chunk border (~90k in the test world).
 - **Runtime world changes:** change the records, clear `chunk_t.sorted`, update `ymin`/`ymax`, call `computeExposure` for that window position and its 4 neighbours, then `collideInvalidate()` (the collision grid is built from the records). Not written back to the file. `computeExposure` uses an occupancy grid (chunk plus 1-cell border; layers at y >= 0 solid with a ground plane) in `DBL_BUF2`; a neighbour outside the window counts as empty (its faces point away from the camera).
 - **Chunk culling** (`cullChunks`, C): camera-space bounding box of each chunk's 4 corners against the same near/far/side tests as a box, with quarter-unit slack for table rounding.
-- **Memory:** bss and the malloc heap share 0xD052C6-0xD13FD8 (~60.4 KB); bss is at 57.5 KB (chunks 32.5, `projected[MAX_PROJECTED = 400]` 15.6, `fill.S` 4.2, rest ~5.2), ~1.5 KB left. The program runs from user RAM (20.5 KB code, 25.1 KB read-only data, mostly tables).
-  - **More memory:** ~90 KB of user RAM is free with the program loaded. A scratch AppVar (`ti_Open("...", "w")`, `ti_Resize`, `ti_GetDataPtr`) gives a block (40,000 bytes worked); its pointer is invalid after any variable is created, deleted, resized or (un)archived, so delete it before `worldClose`.
-  - The dense preset (no ground plane, chunks at 255) fills the 400 projected boxes in most views, dropping the farthest.
+- **Memory:** bss and the malloc heap share 0xD052C6-0xD13FD8 (~60.4 KB); bss is at 58.2 KB (24 chunks 31.2, `projected[MAX_PROJECTED = 400]` 15.6, `fill.S` 4.2, rest ~7), ~2.5 KB left. The program runs from user RAM (23.3 KB code, 36.4 KB read-only data, mostly tables: log 12 KB, exp 14.6 KB, recip 7.3 KB).
+  - **User RAM** (CEmu, clean calculator, HUD build running): 46 KB free before the scratch AppVar, 32 KB after. A scratch AppVar's pointer is invalid after any variable is created, deleted, resized or (un)archived (nothing does at runtime).
+  - The dense preset (no ground plane, chunks at 255) fills the 400 projected boxes in most views (83 of 100), dropping the farthest.
 
 ## Painter's order
 
 - Boxes are drawn **near to far** by **Manhattan distance in grid cells** from the camera's cell. For unit voxels this is exact: if A hides part of B, every coordinate is monotonic along the sight line, so A's cell lies between the camera's and B's on each axis and A's distance is strictly smaller. Camera depth (z) is *not* a valid key.
 - **Across chunks** the same argument holds: `projectScene` visits chunks by Manhattan chunk distance (`visit_order`) and each chunk's boxes by cell distance; the concatenation is exact. `fill.S` walks `projected[]` forwards. Near to far means a full `projected[]` drops the farthest boxes (`projectRecords` stops at `room`).
 - **A chunk's order changes only when the camera's cell changes on an axis where the camera is inside the chunk's range** (x, z: its 8 cells; y: its records' range). `sortChunk` stores that relation per axis (`sortRel`) and re-sorts only when it changes, only for chunks about to be projected.
-  - This needs every key exact, culled boxes included: `gridDist` is |d| of the index's low byte as a signed byte (exact to +-127), and `chunks.h` asserts the window (|dx|, |dz| <= 23) and y range (camera y cell in `CAM_Y_MIN` (-32) ... 0, kept by the collision ceiling) keep keys exact and under 256.
+  - This needs every key exact, culled boxes included: `gridDist` is |d| of the index's low byte as a signed byte (exact to +-127), and `chunks.h` asserts the window (|dx|, |dz| <= 31) and y range (camera y cell in `CAM_Y_MIN` (-32) ... 0, kept by the collision ceiling) keep keys exact and under 256.
 - `sortRecords` (`sort.S`): stable counting sort on byte keys through a scratch copy: key and count, prefix, place, `ldir` back. ~480 cycles per record.
   - `gridDist`, the counts and the start indices each begin on a 256-byte boundary (`.balign 256`) so `ld e,a` / `ld l,a` index them without an add.
   - **Self-modifying code:** the three bias bytes and the running maximum key are patched into `add a,n` / `cp a,n`.
@@ -184,15 +193,16 @@ VRAM 0xD40000-0xD657FF is four 38,400-byte (0x9600) 4bpp frames: `BUFFER_1`, `BU
 - `mlt rr` clears the upper byte of the 24-bit register (`ld h, a / ld l, n / mlt hl / add hl, de` relies on it).
 - **Compiler bug (ez80-clang 22.1.8):** a chain of compares turned into a 0/1 value (`a && b && c` stored, not branched on) can emit `sbc a, l` instead of `sbc a, a`. Write such tests as `if`s, and before trusting a safety check grep `obj/lto.s` for `sbc\ta, [bcdehl]$` (should find nothing).
 - **Hot per-object code belongs in assembly** (`src/*.S`); per-frame code can stay in C. ABI: arguments at `sp+3`, `sp+6`, `sp+9` (3 bytes each, even for `char`); 8-bit result in `A`, 24-bit in `HL`. Preserve `IX`; `AF BC DE HL IY` may be clobbered. Inline `__asm__` works (`"+l"` = HL), but `.S` files are easier to reason about.
-- **Typical frame cost** (test world with ground plane, 128-view bench walk, ~64 boxes): ~1.42M cycles, of which `fillScene` 49%, `projectRecords` 25%, `drawSpans` 13% (it now also writes both LCD rows of untouched rows), de-interlace 7%; `setupCamera` is 18k, the player and collision 5-25k (not in the bench), the HUD ~60k. The spawn view (wall and tree up close) runs 18 FPS with the HUD.
+- **Typical frame cost** (test world with ground plane, 128-view bench walk, ~129 boxes, render distance 24): ~1.98M cycles, of which `fillScene` 45%, `projectScene` 39% (sorts and `cullChunks` included), `drawSpans` 10%, de-interlace 5%; `setupCamera` is 23k, the player and collision 5-25k (not in the bench), the HUD ~60k. At render distance 16 it was ~1.42M (~64 boxes).
 - **Bench history** (k-cycles; frame = scene + `setupCamera` + de-interlace), before/after the November 2026 optimization pass: 100 random views 207.2M -> 198.8M (-4%), 128-view walk 186.9M -> 182.2M (-2.5%), dense 100 views ~782M -> ~695M (-11%, `fillScene` -25%). Gains: face visibility trim (`fill.S`), background rows written to both LCD rows, `setupCamera`/`cullChunks` without library calls, `fillRotTable` in asm, shorter row reset in `fillScene`.
+- **Render distance 16 -> 24** (with the near-plane fix and the 7x7 window), scene only: 100 random views 185.7M -> 251.9M (+36%; boxes per view 82 -> 154, worst view 3.28M -> 3.90M), 128-view walk frame 182.2M -> 252.8M (+39%), dense ~695M -> 659M (the 400-box cap). By `render_dist` (100 views, old 0.5 near plane): 16: 205.7M, 20: 233.4M, 24: 252.9M. Even at 16 the new code costs +11% over the old: boxes pressed against or under the camera are now drawn, and the outer chunk ring fills the sides of the view the 5x5 window lacked. Fog: same scene cost.
 
 ## Open issues
 
-- A box straddling the near plane is not clipped: a corner nearer than `NEAR_PLANE` is projected at `NEAR_PLANE` (stretched, not cut).
+- Near-plane clipping at non-cardinal yaws moves whole corners (one point per vertical edge): a side next to a clipped corner between two visible sides loses a sliver at the screen edge, and a top or bottom face may lose a corner triangle.
 - The ground is a flat colour below the horizon, not geometry.
 - Big near objects made of many 1x1 faces (hill, house) are the slow views; merging coplanar wall and step faces would help (only the floor is merged, into the ground plane).
-- bss is nearly full; more memory means a scratch AppVar (see World and chunks).
+- bss is nearly full; the chunk window already uses VRAM and a scratch AppVar. The read-only tables are ~34 KB of the program.
 - Runtime world changes are not written back to the file.
 
 `readme.md` has the TODO list and changelog. `docs/` holds the README's demo recordings (APNG). `gfx/` holds convimg palette output; only `src/` is compiled, and `palette` in `colours.c` is the one used. Branches: `main` is current; `debug` has per-object timing calls; `rewrite` is the pre-filled-rendering rewrite.

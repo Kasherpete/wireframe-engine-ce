@@ -26,11 +26,16 @@ VIEW_HALF_WIDTH = 80    # logical px from the screen centre to the viewport edge
 # Horizontal culling keeps |x| <= (CULL_X_NUM / CULL_X_DEN) z, which must be exactly the view:
 # VIEW_HALF_WIDTH / FOCAL_LENGTH (80 / 64 = 1.25, a 102 deg FOV). project.S hard-codes 4 x vs 5 z.
 CULL_X_NUM, CULL_X_DEN = 5, 4
-RENDER_DIST = 16        # far plane, in world units (GRID_RANGE). The 5 x 5 chunk window (main.c) covers 16
-NEAR_PLANE = SUBUNITS // 2  # boxes with a corner nearer than this are culled (1/SUBUNITS units)
+RENDER_DIST = 24        # largest far plane, in world units (GRID_RANGE). The 7 x 7 chunk window (chunks.h) covers 24.
+                        # render_dist (camera.c) can lower it at runtime: the proof below holds for any nearer far plane
+# The near plane (1/SUBUNITS units): geometry nearer is clipped (project.S). The body keeps the eye
+# BODY_RADIUS = 0.3 from any wall (player.h), and a wall at distance d is at least d / |(1.25, 1)|
+# = d / 1.6008 deep where the view's side edge meets it, so 0.3 / 1.6008 = 0.1874 is the most that
+# never clips a wall the player stands against (camera.c asserts it): 23 / 128 = 0.1797
+NEAR_PLANE = 23
 LOG_STEPS = 256         # log table resolution: steps per doubling (0.27% per step)
 SIN_STEPS = 256         # yaw angles per full turn
-LOG_ZERO = -300         # logTable[0]: low enough that a = 0 always projects to offset 0
+LOG_ZERO = -800         # logTable[0]: low enough that a = 0 always projects to offset 0
 
 FAR_PLANE = RENDER_DIST * SUBUNITS
 
@@ -47,8 +52,11 @@ def main():
 
     # Size the tables so project.S needs no range check: cover every |a| and every log difference
     # logTable[|a|] - logTable[z] that survives the culling in project.S.
-    #   Every corner has z in [NEAR_PLANE, FAR_PLANE). A box's corners spread by at most `spread` in
-    #   x and in z. With R = CULL_X_NUM / CULL_X_DEN, culling keeps a box only if xmin <= R zmax and
+    #   Every corner has z < FAR_PLANE, and the farthest one z >= NEAR_PLANE. A corner nearer than
+    #   NEAR_PLANE is moved along a box edge to depth NEAR_PLANE (project.S, near plane), or at
+    #   cardinal yaws the near face is moved to it. Either way the point projected lies in the box's
+    #   footprint at depth z = NEAR_PLANE, so the bounds below hold for it with z = NEAR_PLANE.
+    #   A box's corners (and so the points of its footprint) spread by at most `spread` in x and z. With R = CULL_X_NUM / CULL_X_DEN, culling keeps a box only if xmin <= R zmax and
     #   xmax >= -R zmax (exact: project.S compares CULL_X_DEN x with CULL_X_NUM z), and yt <= zmax and
     #   yb >= -zmax with yb = yt + SUBUNITS. So any corner has
     #     |x| <= R zmax + spread      and  zmax <= z + spread  ->  |x| <= R (z + spread) + spread
@@ -79,6 +87,12 @@ def main():
                 for z in range(NEAR_PLANE, FAR_PLANE)
                 for bound in (x_bound, y_bound))
     exp_min, exp_max = d_min, d_max + 1
+    # Near-plane clipping (project.S, .Lclip_one) moves a corner behind the near plane along a box
+    # edge: |dx| a / b = expTable[log |dx| + log a - log b - log FOCAL_LENGTH], with |dx| <= SUBUNITS
+    # (an edge) and a <= b, so the index is at most this. Below exp_min the result is 0 (checked there)
+    assert FOCAL_LENGTH & (FOCAL_LENGTH - 1) == 0, "project.S subtracts log2(FOCAL_LENGTH) steps"
+    assert log_table[SUBUNITS] - LOG_STEPS * int(math.log2(FOCAL_LENGTH)) <= exp_max, \
+        "near-plane clipping must stay inside expTable" 
     exp_table = [rnd(FOCAL_LENGTH * 2 ** (d / LOG_STEPS)) for d in range(exp_min, exp_max + 1)]
     assert rnd(FOCAL_LENGTH * 2 ** ((log_table[0] - log_table[NEAR_PLANE]) / LOG_STEPS)) == 0, \
         "LOG_ZERO must be low enough that a = 0 projects to 0"
@@ -112,6 +126,8 @@ def main():
 #define TABLE_RENDER_DIST   {RENDER_DIST}
 #define TABLE_NEAR_PLANE    {NEAR_PLANE}
 #define TABLE_FAR_PLANE     {FAR_PLANE}
+#define TABLE_LOG_STEPS     {LOG_STEPS}
+#define TABLE_FOCAL_LOG2    {int(math.log2(FOCAL_LENGTH))}
 #define LOG_TABLE_LEN       {log_table_len}
 #define EXP_TABLE_MIN       {exp_min}
 #define EXP_TABLE_LEN       {len(exp_table)}

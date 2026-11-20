@@ -20,8 +20,12 @@ For now it is an engine; once it is in a ready state it will be used to make a c
   from the camera's cell, which is exact for unit cubes, and a chunk is only re-sorted when the
   camera moves into a cell that changes its order.
 - **Chunked worlds** of up to ~16k voxels in an AppVar (archived worlds are read straight from
-  flash). The 5 x 5 chunks around the camera are kept in RAM and streamed in as you walk.
-- **Level of detail:** distant boxes become single rectangles, then 2 x 2 pixel dots.
+  flash). The 7 x 7 chunks around the camera are kept in RAM and streamed in as you walk.
+- **Render distance 24**, adjustable at runtime (`render_dist`).
+- **Level of detail:** distant boxes become single rectangles.
+- **Near-plane clipping:** walls stay solid when you stand right against them.
+- **Distance fog** as a separate build (`make fog`): distant boxes and the ground fade into the
+  sky colour, so nothing pops in at the far plane.
 - **Ground plane** drawn as background for free, so a floor costs nothing.
 - **Collision and physics:** the player slides along walls, falls off ledges, jumps onto voxels,
   hits ceilings and crouches under overhangs.
@@ -50,12 +54,14 @@ extract `ez80-clang` and `ez80-link` into `CEdev/bin`. Python 3 is used to gener
 ```sh
 make          # bin/DEMOPRGM.8xp and the test world bin/WORLD.8xv
 make hud      # the same with an on-screen HUD: FPS, scene time (d) and frame time (f)
+make fog      # the distance fog version, bin/DEMOFOG.8xp (combine: make fog hud)
 make debug    # -O0 with dbg_printf (combine: make debug hud)
 ```
 
 Send `DEMOPRGM.8xp`, `WORLD.8xv` and the [CE C libraries](https://github.com/CE-Programming/libraries/releases)
 (`clibs.8xg`) to the calculator. On TI-OS 5.8 and later, native programs need a jailbreak such as
-[arTIfiCE](https://yvantt.github.io/arTIfiCE/) to run.
+[arTIfiCE](https://yvantt.github.io/arTIfiCE/) to run. Besides the program itself, the chunk window
+needs about 15 KB of free RAM (a temporary AppVar, deleted on exit).
 
 ### Worlds
 
@@ -135,12 +141,16 @@ compiler path to `CEdev/bin/ez80-clang` and the include path to `CEdev/include` 
 
 - [ ] Merge coplanar faces of big flat objects (walls, steps): the slowest views are large objects
       made of many 1 x 1 faces up close
-- [ ] Clip boxes at the near plane instead of stretching them
+- [x] Clip boxes at the near plane instead of stretching them
 - [ ] Write runtime world changes back to the file
-- [ ] Distance fog (darker colours farther away)
-- [ ] Use a scratch AppVar for more memory (bss is nearly full)
+- [x] Distance fog (`make fog`; decide whether it becomes the default)
+- [x] Use a scratch AppVar for more memory (bss is nearly full)
 
 ## Changelog
+
+***v1.1.0*** - Render distance 16 -> 24 (7 x 7 chunk window, chunks in bss, spare VRAM and a scratch
+AppVar), near-plane clipping (walls no longer vanish when you stand against them), a distance fog
+build (`make fog`), and the 2 x 2 pixel level of detail removed.
 
 ***v1.0.0*** - Filled voxel rendering with hidden surface removal, chunked worlds in an AppVar,
 level of detail, a ground plane, crouching and jumping, collision with the world (walls, floors,

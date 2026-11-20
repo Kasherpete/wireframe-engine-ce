@@ -7,14 +7,15 @@
 // it, also shown on their own), fillScene and drawSpans, the worst view, and the most boxes in a
 // view. Checked on every view:
 //   sort bad   the visible chunks are in order (keys near to far) and hold the same records
-//   expo bad   after each window update, computeExposure of the inner 3 x 3 chunks against the
+//   expo bad   after each window update, computeExposure of the inner 5 x 5 chunks against the
 //              faces stored in the world file
 //   deint bad  views where an LCD row pair differs after deinterlaceFrame
 // The second column breaks projectScene down (cull, sorts, projectRecords) and adds the costs of
 // a frame outside the scene: setupCamera and the de-interlace copy.
 //   bad px     with -DFILL_REFERENCE each view is also drawn by fill_ref.c into BUFFER_2 and
 //              compared byte for byte with BUFFER_1
-// -DBENCH_LOD_RECT=a -DBENCH_LOD_PIX=b override the level of detail distances.
+// -DBENCH_LOD_RECT=a overrides the level of detail distance, -DBENCH_RENDER=d the far plane
+// (render_dist), -DFOG_BUILD turns the fog on (-DBENCH_FOG=d: fog_dist).
 // -DBENCH_WALK walks instead: from cell (BENCH_XMIN, BENCH_ZMIN + 0.5) along +x at eye height
 // 1.5, looking along +x, a quarter cell per view (as walking at 60 FPS crosses about 1/15 cell
 // per frame, the loads and sorts per view are about 4 times a frame's), so "max load k" and the
@@ -90,7 +91,7 @@ static void checkSort(void) {
     }
 }
 
-// the engine's computeExposure against the faces make_world.py stored, for the inner 3 x 3 chunks
+// the engine's computeExposure against the faces make_world.py stored, for the inner 5 x 5 chunks
 // (their 4 neighbours are all in the window)
 static void checkExposure(void) {
     static uint8_t stored[CHUNK_MAX];
@@ -120,9 +121,18 @@ static void line(uint8_t x, uint8_t y, const char *s, uint24_t v) {
 int main(void) {
 #ifdef BENCH_LOD_RECT
     lod_rect_dist = BENCH_LOD_RECT;
-    lod_pixel_dist = BENCH_LOD_PIX;
 #endif
-    if (!worldStart()) return 0;
+#ifdef BENCH_RENDER
+    render_dist = BENCH_RENDER;
+#endif
+#ifdef BENCH_FOG
+    fog_dist = BENCH_FOG;
+#endif
+    if (!windowAlloc()) return 0;
+    if (!worldStart()) {
+        windowFree();
+        return 0;
+    }
     coloursInit();
     playerSpawn();
     hudInit();
@@ -244,5 +254,6 @@ int main(void) {
         kb_Scan();
     }
     gfx_End();
+    windowFree();
     return 0;
 }

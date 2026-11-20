@@ -7,15 +7,17 @@
 #define TABLE_VIEW_HALF_WIDTH 80
 #define TABLE_CULL_X_NUM    5
 #define TABLE_CULL_X_DEN    4
-#define TABLE_RENDER_DIST   16
-#define TABLE_NEAR_PLANE    64
-#define TABLE_FAR_PLANE     2048
-#define LOG_TABLE_LEN       2741
-#define EXP_TABLE_MIN       -3116
-#define EXP_TABLE_LEN       3869
+#define TABLE_RENDER_DIST   24
+#define TABLE_NEAR_PLANE    23
+#define TABLE_FAR_PLANE     3072
+#define TABLE_LOG_STEPS     256
+#define TABLE_FOCAL_LOG2    6
+#define LOG_TABLE_LEN       4021
+#define EXP_TABLE_MIN       -3766
+#define EXP_TABLE_LEN       4856
 #define SIN_TABLE_LEN       256
-#define SCREEN_COORD_MAX    490
-#define RECIP_TABLE_LEN     981
+#define SCREEN_COORD_MAX    1221
+#define RECIP_TABLE_LEN     2443
 
 #ifndef __ASSEMBLER__
 #include <stdint.h>

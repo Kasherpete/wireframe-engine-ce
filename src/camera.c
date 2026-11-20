@@ -2,9 +2,16 @@
 #include <string.h>
 
 #include "camera.h"
+#include "collide.h"
+#include "fill.h"
 #include "player.h"
 
 _Static_assert(SIN_TABLE_LEN == 256, "yaw is looked up as a byte");
+// A wall the body touches (the eye BODY_RADIUS from it) is at least BODY_RADIUS / |(1.25, 1)| deep
+// where the side of the view meets it: the near plane must not be deeper, or the wall shows a gap
+// at the screen edge. 1.6008 > |(1.25, 1)|, all in 1/65536 units
+_Static_assert((int32_t)NEAR_PLANE * (65536 / SUB) * 16008 <= (int32_t)BODY_RADIUS * 10000,
+               "the near plane would clip walls the player stands against (gen_tables.py)");
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
@@ -13,10 +20,12 @@ int24_t cam_cell_x, cam_cell_y, cam_cell_z;
 int24_t cam_sin, cam_cos;
 
 uint8_t lod_rect_dist = LOD_RECT_DIST;
-uint8_t lod_pixel_dist = LOD_PIXEL_DIST;
+uint8_t render_dist = GRID_RANGE;
+uint8_t fog_dist = FOG_DIST;
 
 // shared with project.S, see engine.h (the cam_ scalars are defined in project.S)
 int24_t cam_bias_x, cam_bias_y, cam_bias_z;
+int24_t cam_far;
 int24_t rotX_[2 * GRID_LEN], rotZ_[2 * GRID_LEN], camY_[GRID_LEN];
 uint8_t cam_axis_corner[4];
 
@@ -73,7 +82,17 @@ static int24_t halfTowardZero(int24_t v) {
 }
 
 
-// Per frame, in C, but with no library calls but fillRotTable's: multiplies by constants are adds
+#ifdef FOG_BUILD
+// Logical rows below the horizon of the ground beyond depth d (world units), for an eye h above the
+// ground (1/65536 units): the ground at depth d is 64 h / d rows down, so the rows whose centre is
+// above that, rounded. A division (~2k cycles), twice a frame
+static uint8_t groundRows(int24_t h, int24_t d) {
+    const int24_t v = (h + (d << 9)) / (d << 10);
+    return (uint8_t)(v > VIEW_H - CENTRE_Y ? VIEW_H - CENTRE_Y : v);
+}
+#endif
+
+// Per frame, in C, but with no library calls but fillRotTable's (and the fog's divisions): multiplies by constants are adds
 // and shifts, the cells and fractions of the position are bytes of it (CELL_OF, player.h), and the
 // box centre offset halves instead of dividing by 6
 void setupCamera(void) {
@@ -138,14 +157,56 @@ void setupCamera(void) {
 
     // level of detail: by the depth of the nearest corner, z00 + kzmin3. 3 SUB = 384 = 256 + 128
     _Static_assert(3 * SUB == 384, "3 SUB d = (d << 8) + (d << 7)");
-    const int24_t lr = lod_rect_dist, lp = lod_pixel_dist;
+    // At least 1 unit: then the centre of a rectangle is beyond the near plane (project.S
+    // projects it there unclipped)
+    int24_t lr = lod_rect_dist;
+    if (lr < 1) {
+        lr = 1;
+    }
     cam_lod_rect = (lr << 8) + (lr << 7) - kzmin3;
-    cam_lod_pix  = (lp << 8) + (lp << 7) - kzmin3;
 
-    // culling constants, see engine.h. The horizontal view is |x| <= 1.25 z: 4 x against 5 z
+    // the far plane (x3), at most the tables' (gen_tables.py proves them for any nearer one)
+    int24_t rd = render_dist;
+    if (rd > GRID_RANGE) {
+        rd = GRID_RANGE;
+    }
+    if (rd < 1) {
+        rd = 1;
+    }
+    const int24_t far3 = (rd << 8) + (rd << 7);
+    cam_far = rd << 7;
+
+    // fog: by the depth of the centre, z00 + kzmid3. Off: a depth no box reaches
+#ifdef FOG_BUILD
+    const int24_t fd = fog_dist;
+    cam_fog = (fd << 8) + (fd << 7) - cam_kzmid3;
+    // the background rows (fill.h): sky, then the ground beyond the far plane in sky colour, the
+    // ground beyond fog_dist dithered, the rest plain. -player_y is the eye height (the ground is
+    // y = 0, and the collision keeps the eye above it and within 2^23 / 65536 units)
+    if (fd < rd) {
+        int24_t h = -(int24_t)player_y;
+        if (h < 0) {
+            h = 0;
+        }
+        const uint8_t nfar = groundRows(h, rd), nfog = groundRows(h, fd);
+        bg_rows[0] = CENTRE_Y + nfar;
+        bg_rows[1] = nfog - nfar;
+        bg_rows[2] = VIEW_H - CENTRE_Y - nfog;
+    } else {
+        bg_rows[0] = CENTRE_Y;
+        bg_rows[1] = 0;
+        bg_rows[2] = VIEW_H - CENTRE_Y;
+    }
+#else
+    cam_fog = 0x400000;
+#endif
+
+    // culling constants, see engine.h. The horizontal view is |x| <= 1.25 z: 4 x against 5 z.
+    // Depth: the FARTHEST corner in [NEAR_PLANE, far): a box reaching nearer than the near plane
+    // is clipped there by project.S, so a wall the camera is pressed against does not vanish
     const int24_t kzmax15 = (kzmax3 << 2) + kzmax3;
-    cam_zlo   = 3 * NEAR_PLANE - kzmin3;
-    cam_zspan = (3 * FAR_PLANE - kzmax3) - cam_zlo;
+    cam_zlo   = 3 * NEAR_PLANE - kzmax3;
+    cam_zspan = far3 - 3 * NEAR_PLANE;
     cam_cxl   = -((kxmax3 << 2) + kzmax15);
     cam_cxr   = kzmax15 - (kxmin3 << 2);
     cam_cyl   = -(3 * SUB + kzmax3);
