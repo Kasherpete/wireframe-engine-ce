@@ -1,8 +1,6 @@
 // The chunk window (chunks.h): loading, painter's sort, exposure.
 #include <string.h>
 #include <fileioc.h>
-#include <ti/screen.h>
-#include <ti/getcsc.h>
 
 #include "chunks.h"
 #include "camera.h"
@@ -225,12 +223,7 @@ uint8_t windowAlloc(void) {
         return 1;
     }
     windowFree();
-    os_ClrHome();
-    os_PutStrFull("Not enough free RAM: the");
-    os_NewLine();
-    os_PutStrFull("chunks need 15 KB");
-    while (!os_GetCSC()) {
-    }
+    displayError("Not enough free RAM: the", "chunks need 15 KB");
     return 0;
 }
 

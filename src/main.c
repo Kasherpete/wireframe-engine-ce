@@ -21,6 +21,10 @@
 
 int main(void) {
 
+    // the loading screen, first: the world's CRC check takes a while (~2 s for 36 KB)
+    displayLoading();
+    uint8_t loading = 1;
+
     // wait until the keys that started the program are released
     while ((kb_Data[1] & kb_2nd) || (kb_Data[6] & kb_Enter)) {
         msleep(100);
@@ -28,7 +32,7 @@ int main(void) {
     }
 
     // the chunk memory (a scratch AppVar: created before the world is opened, as creating a
-    // variable may move it), then the world file: on an error there is nothing to show
+    // variable may move it), then the world file. On an error displayError ends graphx and reports it
     if (!windowAlloc()) {
         return 0;
     }
@@ -48,6 +52,7 @@ int main(void) {
     windowInit();
     setupCamera();
     windowFollow();
+    displayProgress(LOADING_FULL);
 
     // FPS calculation
     uint8_t frame_count = 0;
@@ -107,6 +112,10 @@ int main(void) {
         // copy the drawn rows to the rows below, and show the frame
         deinterlaceFrame(HUD_ROWS);
         swapBuffer();
+        if (loading) {
+            displayLoadingEnd();     // the first frame replaces the loading screen
+            loading = 0;
+        }
 
         frame_cycles = CYCLES() - frame_start - wait_cycles;
     }

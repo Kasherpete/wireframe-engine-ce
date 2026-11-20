@@ -40,9 +40,31 @@
 #define draw_buffer_ctrl    lcd_LpBase   // where graphx draws
 #define screen_buffer_ctrl  lcd_UpBase   // what the LCD scans out
 
-// graphx, the palette, 4bpp mode, both frames cleared to the sky colour. Before the window loads:
-// chunks.c uses DBL_BUF2 as scratch afterwards
+// graphx, the palette, 4bpp mode, and the loading screen in BUFFER_1: white (palette entry 7
+// pure white until displayLoadingEnd), an empty progress bar in the middle. First thing in main;
+// errors before displayInit go through displayError. With a viewport narrower than the screen,
+// BUFFER_1 would keep white side bars
+void displayLoading(void);
+
+// the progress bar, out of LOADING_FULL: filled to done (never back). Nothing unless the loading
+// screen is up. The steps, by measured time (the CRC is ~80% of startup in the test world, ~95% in
+// the dense one): up to LOADING_CRC during the CRC, then the values below
+#define LOADING_FULL   256
+#define LOADING_CRC    216     // worldOpen, block by block
+#define LOADING_CHECK  232     // worldOpen done (range checks)
+#define LOADING_INIT   240     // displayInit
+void displayProgress(uint24_t done);
+
+// after the first swapBuffer: waits until the LCD shows the first frame, then the game palette
+void displayLoadingEnd(void);
+
+// BUFFER_2 becomes the draw buffer (displayLoading first if it has not run). Before the window
+// loads: chunks.c uses DBL_BUF2 as scratch afterwards
 void displayInit(void);
+
+// ends graphx if it is running, prints line1 (and line2 unless NULL) on the home screen and waits
+// for a key
+void displayError(const char *line1, const char *line2);
 
 // Waits until the LCD has started showing the frame swapBuffer last handed it, so the other one
 // is free to draw into

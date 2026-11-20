@@ -3,12 +3,13 @@
 #include <string.h>
 #include <fileioc.h>
 #include <sys/rtc.h>
-#include <ti/screen.h>
-#include <ti/getcsc.h>
+#include <sys/timers.h>
 
+#include "display.h"
 #include "engine.h"
 #include "world.h"
 
+#define CRC_BLOCK  512    // bytes of CRC between progress bar updates
 #define CRC_START  __builtin_offsetof(world_header_t, name)   // the checksum covers the rest
 
 #ifndef __INTELLISENSE__
@@ -111,10 +112,21 @@ uint8_t worldOpen(const char *appvar) {
     } else if (h->version != WORLD_VERSION) {
         err = WORLD_BAD_HEADER;
     } else {
-        if (crc32(0, data + CRC_START, world_size - CRC_START) != h->crc) {
+        // in blocks, for the progress bar (crc32 chains: it inverts on entry and exit)
+        const uint24_t len = world_size - CRC_START;
+        uint32_t crc = 0;
+        for (uint24_t done = 0; done < len; ) {
+            const uint24_t n = len - done < CRC_BLOCK ? len - done : CRC_BLOCK;
+            crc = crc32(crc, data + CRC_START + done, n);
+            done += n;
+            // msleep(10);
+            displayProgress(done * LOADING_CRC / len);      // < 2^24: len < 2^16
+        }
+        if (crc != h->crc) {
             err = WORLD_BAD_CRC;
         } else {
             err = worldCheck(data);
+            displayProgress(LOADING_CHECK);
         }
     }
     if (err != WORLD_OK) {
@@ -142,10 +154,7 @@ uint8_t worldStart(void) {
     if (err == WORLD_OK) {
         return 1;
     }
-    os_ClrHome();
-    os_PutStrFull(worldError(err));
-    while (!os_GetCSC()) {
-    }
+    displayError(worldError(err), NULL);
     return 0;
 }
 
