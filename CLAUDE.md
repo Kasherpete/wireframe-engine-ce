@@ -37,12 +37,11 @@ Voxel 3D renderer (filled, shaded faces, hidden surface removal) for the TI-84 P
 ```sh
 make          # release -> bin/DEMOPRGM.8xp, also builds bin/WORLD.8xv (needed at runtime)
 make hud      # plus on-screen HUD (FPS, D/F timings)
-make fog      # distance fog variant -> bin/DEMOFOG.8xp (FOG_BUILD; both can be on the calculator)
-make debug    # -O0, dbg_printf enabled (combine: make debug hud, make fog hud)
+make debug    # -O0, dbg_printf enabled (combine: make debug hud)
 ```
 
 - The build must have no warnings. `GFX_LCD_WIDTH/HEIGHT` are `#undef`ed before redefinition; the makefile passes `--no-warn-execstack`.
-- The variant is written to `obj/variant`, so switching rebuilds C files. `.S` files don't depend on it: don't use `SHOW_HUD`/`DEBUG`/`FOG_BUILD` there (fog reaches `project.S` as the runtime value `cam_fog`).
+- The variant is written to `obj/variant`, so switching rebuilds C files. `.S` files don't depend on it: don't use `SHOW_HUD`/`DEBUG` there.
 - `.S` objects don't track the headers they include either: after changing `engine.h`, `projection_tables.h` (`gen_tables.py`), `chunks.h` or `fill.h`, `make clean`, or a stale object links (an old `camera.S` built for range 16 silently produced wrong rotation tables).
 - `.S` files go through the C preprocessor, then the GNU z80 assembler. Keep `;` comments free of apostrophes, and shared `#define` values must not start with `(` (read as a memory load).
 - After adding or removing a header, `make clean`.
@@ -53,7 +52,6 @@ make debug    # -O0, dbg_printf enabled (combine: make debug hud, make fog hud)
 ```sh
 utils/run_cemu.sh                                     # -> /tmp/cemu_run/t01..t12.png
 SHOTS=6 KEYS='"key|right"' utils/run_cemu.sh bin/DEMOPRGM.8xp /tmp/out
-utils/run_cemu.sh bin/DEMOFOG.8xp /tmp/fog            # the fog build (the on-calc name is the file name)
 ```
 
 - Boots a clean calculator, sends `clibs.8xg`, the world, arTIfiCE (TI-OS 5.8 blocks native ASM otherwise) and the program, and screenshots every 2 s. Inputs: `~/Downloads/ROM_IMAGE_2.rom`, `clibs.8xg`, `arTIfiCE_v2.1.8xp` (override with `CEMU_ROM`, `CEMU_CLIBS`, `CEMU_ARTIFICE`; `FILES=` sends no world).
@@ -71,7 +69,7 @@ The LCD is in 4bpp mode (`lcd_Control = 0x13925`), but graphx draws as if 8bpp 3
 - One graphx row (320 bytes) is two LCD rows; a frame is 120 graphx rows. Bytes 0-159 of a row are the top LCD row, 160-319 the row below. Each byte is 2 horizontal pixels (nibbles).
 - So graphx sees a **logical 160x120 screen**; `GFX_LCD_WIDTH`/`HEIGHT` are redefined to 160/120 on purpose, `GFX_WIDTH_HALF`/`HEIGHT_HALF` are 80/60.
 - **Colours are doubled nibbles** (`0x33` = palette entry 3 twice; mixed bytes dither). 16 colours: `palette` in `colours.c` (PICO-8 style).
-- Background: sky above the horizon (row `CENTRE_Y`), ground below, as three bands of rows `bg_rows` (`fill.h`): sky colour, `bg_dither3`, `ground_colour3`. Without fog `{60, 0, 60}`; the fog build moves the ground beyond the far plane into the first band and dithers the ground beyond `fog_dist` (`setupCamera`, `fill_ref.c` matches).
+- Background: sky above the horizon (row `CENTRE_Y`), ground below, as three bands of rows `bg_rows` (`fill.h`): sky colour, `bg_dither3`, `ground_colour3`. With fog off (`fog_dist` at or beyond the far plane) `{60, 0, 60}`; otherwise the ground beyond the far plane moves into the first band and the ground beyond `fog_dist` is dithered (`setupCamera`, `fill_ref.c` matches).
 - graphx only draws the even LCD rows; each frame `deinterlaceFrame` (`fill.S`) copies them to the odd rows, one `ldir` per row (~1.3k cycles), except rows nothing was drawn in: `drawSpans` fills both LCD rows of those with background by `push` (320 bytes, ~0.5k more than 160). About 40% of rows in a walk; the first `HUD_ROWS` rows are always copied (HUD text is drawn after `drawSpans`). A drawing-one-field interlaced mode was removed (commit 8f3d1e3) because it combed while moving.
 - **Viewport** is the whole logical screen (`SCREEN_OFFSET` 0, `VIEWPORT_LENGTH` 160). A narrower one needs `fillSideBars` and a changed `VIEW_HALF_WIDTH` in `gen_tables.py`. Always compare screen x against `SCREEN_OFFSET` and `SCREEN_OFFSET + VIEWPORT_LENGTH`, never `0`/`VIEWPORT_LENGTH`.
 
@@ -87,7 +85,7 @@ VRAM 0xD40000-0xD657FF is four 38,400-byte (0x9600) 4bpp frames: `BUFFER_1`, `BU
 
 1. `dt` from `clock()` (32768 ticks/s, clamped to 1/8 s); FPS every second.
 2. `playerUpdate(dt)`: keys -> `updateMotion()` (movement and collision). The keypad is in continuous scan mode, so `kb_Data` is always current; never call `kb_Scan()` (~62k cycles).
-3. `setupCamera()` (fog build: also the background bands, two divisions), then `windowFollow()` (`updateWindow` loads chunks that entered the window).
+3. `setupCamera()` (also the fog background bands, two divisions), then `windowFollow()` (`updateWindow` loads chunks that entered the window).
 4. `projectScene()`: `cullChunks`, then per visible chunk nearest first: `sortChunk` if stale, `projectRecords`. Then `fillScene()` writes spans front to back. Neither touches a frame buffer, so both run before the wait and overlap the LCD showing the last frame. Anything not touching the back buffer belongs here.
 5. `waitForBufferScan()` waits for `lcd_IntStatus` bit 2 ("next base update"), which `swapBuffer` clears right after writing the new base.
    - Don't poll `lcd_UpBaseCurr` instead: it stops changing while the LCD is idle, so frames under ~5 ms swapped twice per refresh and drew into the displayed buffer.
@@ -129,7 +127,7 @@ VRAM 0xD40000-0xD657FF is four 38,400-byte (0x9600) 4bpp frames: `BUFFER_1`, `BU
   - `CULL_X_NUM / CULL_X_DEN` must equal `VIEW_HALF_WIDTH / FOCAL_LENGTH`; `project.S` hard-codes 5/4 and `#error`s on change.
 - **Level of detail.** A box whose nearest corner is at least `lod_rect_dist` deep (`LOD_RECT_DIST` = 12, at least 1) becomes `BOX_RECT`: the rectangle of its x/y extent at its centre depth (4 projections, one rectangle in `fill.S`). At or beyond the far plane it is off. A variable in `camera.c`, read every frame. (A 2x2 pixel level from 24 units was removed.)
   - The colour is a visible side if any: `.Llod_side` keeps only the x or z side pointing most at the camera *position* (larger of |dx|, |dz| by `gridDist`; z on a tie), so it doesn't change while turning. `lod_slot` is a fixed table (`sceneInit`). Voxels at y cell 0 are never LOD boxes.
-- **Fog** (`make fog`, `FOG_BUILD`): a box whose centre is at least `fog_dist` deep (`FOG_DIST` = 16; the `cam_fog` test in `project.S` is ~15 bytes, ~60 cycles, per kept box in every build) gets material + `MAT_FOGGED` (16): `materials[16..31]` are each colour byte with one nibble replaced by the sky colour (a 50% dither; the z side takes the x side's shade). The ground between `fog_dist` and the far plane is dithered the same way and the ground beyond it is sky colour (`bg_rows`), so boxes crossing the far plane fade out. Depth, not distance, as the far plane is. Release builds set `cam_fog` beyond any box. Cost: two divisions per frame (~5k cycles), nothing measurable in the scene.
+- **Fog** (every build): a box whose centre is at least `fog_dist` deep (`FOG_DIST` = 16, a variable in `camera.c`; at or beyond `render_dist` turns it off; the `cam_fog` test in `project.S` is ~15 bytes, ~60 cycles, per kept box) gets material + `MAT_FOGGED` (16): `materials[16..31]` are each colour byte with one nibble replaced by the sky colour (a 50% dither; the z side takes the x side's shade). The ground between `fog_dist` and the far plane is dithered the same way and the ground beyond it is sky colour (`bg_rows`), so boxes crossing the far plane fade out. Depth, not distance, as the far plane is. Cost: two divisions per frame (~5k cycles), nothing measurable in the scene.
 - **Regenerating tables:** edit the constants atop `utils/gen_tables.py` (`SUBUNITS`, `FOCAL_LENGTH`, `VIEW_HALF_WIDTH`, `RENDER_DIST`, `NEAR_PLANE`, `LOG_STEPS`...), run `python3 utils/gen_tables.py`, then `make clean`. `RENDER_DIST` must be at most `WINDOW_HALF * CHUNK_SIZE` (24); more needs a 9x9 window (81 chunks). `camera.S` hard-codes `GRID_RANGE` 24. The log table grows ~480 bytes per unit; a nearer `NEAR_PLANE` grows `recipTable` and `expTable` (wider projected coordinates) and needs a lower `LOG_ZERO`.
 
 ## Clipping conventions

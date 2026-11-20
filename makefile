@@ -3,11 +3,6 @@
 # ----------------------------
 
 NAME = DEMOPRGM
-# "make fog" (combine: make fog hud) builds the distance fog variant as DEMOFOG, so both programs
-# can be on the calculator at once
-ifneq ($(filter fog,$(MAKECMDGOALS)),)
-NAME = DEMOFOG
-endif
 #ICON = icon.png
 DESCRIPTION = "A Fast Wireframe Engine for the TI84+ CE"
 COMPRESSED = YES
@@ -28,13 +23,10 @@ EXTRA_LDFLAGS = --no-warn-execstack
 ifneq ($(filter hud,$(MAKECMDGOALS)),)
 CFLAGS += -DSHOW_HUD=1
 endif
-ifneq ($(filter fog,$(MAKECMDGOALS)),)
-CFLAGS += -DFOG_BUILD=1
-endif
 
 # Objects do not depend on compiler flags, so switching between make, make debug and make hud
 # would link stale objects. obj/variant changes whenever the variant does, forcing a rebuild.
-VARIANT := $(or $(sort $(filter debug fog hud,$(MAKECMDGOALS))),release)
+VARIANT := $(or $(sort $(filter debug hud,$(MAKECMDGOALS))),release)
 ifeq ($(filter clean gfx version,$(MAKECMDGOALS)),)
 $(shell mkdir -p obj && (test "$$(cat obj/variant 2>/dev/null)" = "$(VARIANT)" || echo "$(VARIANT)" > obj/variant))
 DEPS = obj/variant
@@ -47,10 +39,9 @@ endif
 
 include $(shell cedev-config --makefile)
 
-.PHONY: default hud fog world
+.PHONY: default hud world
 default: $(BUILD) world
 hud: $(BUILD) world
-fog: $(BUILD) world
 
 world: $(BINDIR)/WORLD.8xv
 $(BINDIR)/WORLD.8xv: utils/make_world.py

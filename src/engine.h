@@ -78,7 +78,7 @@
 // it is a 5 pixel rectangle. Lower is faster and blockier; at or beyond the far plane it is off.
 #define LOD_RECT_DIST   12
 
-// ---- distance fog (make fog: FOG_BUILD; the default of fog_dist, camera.c) ----
+// ---- distance fog (the default of fog_dist, camera.c) ----
 // Boxes whose centre is at least FOG_DIST deep use the fogged half of materials[] (material + 16:
 // every colour byte half sky colour), the ground fades the same way, and beyond the far plane
 // everything is sky colour, so boxes crossing it fade out instead of popping

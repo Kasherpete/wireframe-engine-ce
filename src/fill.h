@@ -44,11 +44,12 @@ extern uint8_t lod_slot[64];
 // display.c
 void waitForBufferScan(void);
 // colours.c: the colour byte of the ground below the horizon, 3 times (the world's ground plane),
-// and the ground half fogged (make fog)
+// and the ground half fogged
 extern uint24_t ground_colour3, bg_dither3;
 // The background rows, top to bottom: sky colour (the sky, then the ground beyond the far plane
 // when fogged), bg_dither3, ground_colour3. They add up to VIEW_H; the first is at least CENTRE_Y.
-// Without fog {CENTRE_Y, 0, VIEW_H - CENTRE_Y}; with it setupCamera (camera.c) sets them per frame
+// setupCamera (camera.c) sets them per frame; {CENTRE_Y, 0, VIEW_H - CENTRE_Y} when fog_dist is at
+// or beyond the far plane
 extern uint8_t bg_rows[3];
 
 #ifdef FILL_REFERENCE

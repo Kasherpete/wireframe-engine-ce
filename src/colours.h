@@ -14,7 +14,7 @@ extern const uint8_t palette[32];
 
 // The colour byte of the ground below the horizon, 3 times (fill.S reads it): the top colour of
 // the world's ground material, or GROUND_COLOUR without a ground plane. And the same half fogged
-// (make fog). Set by coloursInit. The background rows: fill.h
+// Set by coloursInit. The background rows: fill.h
 extern uint24_t ground_colour3, bg_dither3;
 
 // after worldOpen: the ground colour of the open world

@@ -2,7 +2,7 @@
 # Run a build in CEmu and take screenshots, without touching your CEmu config.
 #
 # Usage: utils/run_cemu.sh [program.8xp] [out_dir]
-#   defaults: bin/DEMOPRGM.8xp, /tmp/cemu_run (bin/DEMOFOG.8xp: the fog build)
+#   defaults: bin/DEMOPRGM.8xp, /tmp/cemu_run
 #   KEYS='"key|right","delay|500"'  extra autotester sequence items after launch
 #   SHOTS=12                        number of screenshots (one every 2 s)
 #   FILES="a.8xv b.8xv"             other files to send (default: bin/WORLD.8xv, the world)
@@ -28,7 +28,7 @@ export QT_QPA_PLATFORM=xcb   # the static Qt build has no wayland plugin
 stop_cemu() { for p in $(pgrep -x cemu); do kill "$p"; done; }
 stop_cemu; sleep 1
 
-NAME="$(basename "$PRG" .8xp)"   # the on-calc name (DEMOPRGM, or DEMOFOG for make fog)
+NAME="$(basename "$PRG" .8xp)"   # the on-calc name
 cp "$CLIBS" "$OUT/clibs.8xg"; cp "$ARTIFICE" "$OUT/A.8xp"; cp "$PRG" "$OUT/$NAME.8xp"
 FILES="${FILES-$( [ -f "$ROOT/bin/WORLD.8xv" ] && echo "$ROOT/bin/WORLD.8xv" || true )}"
 EXTRA=""

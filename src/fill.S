@@ -1230,7 +1230,7 @@ _drawSpans:
 	jp	nz, 1b
 	.endm
 	BG_ROWS
-	ld	a, (_bg_rows + 1)	; the ground in the fog (make fog), maybe none
+	ld	a, (_bg_rows + 1)	; the ground in the fog, maybe none
 	or	a, a
 	jp	z, .Lbg_ground
 	ld	iyl, a

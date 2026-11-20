@@ -19,7 +19,7 @@
 ; keeps only the visible side (x or z) that points at the camera position most (.Llod_side).
 ;
 ; Fog: a box whose centre is at least cam_fog deep gets material + MAT_FOGGED (the fogged colours,
-; colours.c). Without fog cam_fog is beyond any box.
+; colours.c). With fog_dist at or beyond the far plane no box reaches cam_fog.
 ;
 ; Why assembly: clang turns every multiply, right shift and even AND into a library call. And the
 ; CE is memory bound: roughly 2 cycles per byte touched, opcode bytes included. So this code

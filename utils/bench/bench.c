@@ -15,7 +15,7 @@
 //   bad px     with -DFILL_REFERENCE each view is also drawn by fill_ref.c into BUFFER_2 and
 //              compared byte for byte with BUFFER_1
 // -DBENCH_LOD_RECT=a overrides the level of detail distance, -DBENCH_RENDER=d the far plane
-// (render_dist), -DFOG_BUILD turns the fog on (-DBENCH_FOG=d: fog_dist).
+// (render_dist), -DBENCH_FOG=d fog_dist (at or beyond the far plane: no fog).
 // -DBENCH_WALK walks instead: from cell (BENCH_XMIN, BENCH_ZMIN + 0.5) along +x at eye height
 // 1.5, looking along +x, a quarter cell per view (as walking at 60 FPS crosses about 1/15 cell
 // per frame, the loads and sorts per view are about 4 times a frame's), so "max load k" and the

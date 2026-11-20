@@ -24,7 +24,7 @@ For now it is an engine; once it is in a ready state it will be used to make a c
 - **Render distance 24**, adjustable at runtime (`render_dist`).
 - **Level of detail:** distant boxes become single rectangles.
 - **Near-plane clipping:** walls stay solid when you stand right against them.
-- **Distance fog** as a separate build (`make fog`): distant boxes and the ground fade into the
+- **Distance fog:** distant boxes and the ground fade into the
   sky colour, so nothing pops in at the far plane.
 - **Ground plane** drawn as background for free, so a floor costs nothing.
 - **Collision and physics:** the player slides along walls, falls off ledges, jumps onto voxels,
@@ -54,7 +54,6 @@ extract `ez80-clang` and `ez80-link` into `CEdev/bin`. Python 3 is used to gener
 ```sh
 make          # bin/DEMOPRGM.8xp and the test world bin/WORLD.8xv
 make hud      # the same with an on-screen HUD: FPS, scene time (d) and frame time (f)
-make fog      # the distance fog version, bin/DEMOFOG.8xp (combine: make fog hud)
 make debug    # -O0 with dbg_printf (combine: make debug hud)
 ```
 
@@ -143,7 +142,7 @@ compiler path to `CEdev/bin/ez80-clang` and the include path to `CEdev/include` 
       made of many 1 x 1 faces up close
 - [x] Clip boxes at the near plane instead of stretching them
 - [ ] Write runtime world changes back to the file
-- [x] Distance fog (`make fog`; decide whether it becomes the default)
+- [x] Distance fog (on in every build)
 - [x] Use a scratch AppVar for more memory (bss is nearly full)
 
 ## Changelog

@@ -82,7 +82,6 @@ static int24_t halfTowardZero(int24_t v) {
 }
 
 
-#ifdef FOG_BUILD
 // Logical rows below the horizon of the ground beyond depth d (world units), for an eye h above the
 // ground (1/65536 units): the ground at depth d is 64 h / d rows down, so the rows whose centre is
 // above that, rounded. A division (~2k cycles), twice a frame
@@ -90,7 +89,6 @@ static uint8_t groundRows(int24_t h, int24_t d) {
     const int24_t v = (h + (d << 9)) / (d << 10);
     return (uint8_t)(v > VIEW_H - CENTRE_Y ? VIEW_H - CENTRE_Y : v);
 }
-#endif
 
 // Per frame, in C, but with no library calls but fillRotTable's (and the fog's divisions): multiplies by constants are adds
 // and shifts, the cells and fractions of the position are bytes of it (CELL_OF, player.h), and the
@@ -176,8 +174,7 @@ void setupCamera(void) {
     const int24_t far3 = (rd << 8) + (rd << 7);
     cam_far = rd << 7;
 
-    // fog: by the depth of the centre, z00 + kzmid3. Off: a depth no box reaches
-#ifdef FOG_BUILD
+    // fog: by the depth of the centre, z00 + kzmid3
     const int24_t fd = fog_dist;
     cam_fog = (fd << 8) + (fd << 7) - cam_kzmid3;
     // the background rows (fill.h): sky, then the ground beyond the far plane in sky colour, the
@@ -197,9 +194,6 @@ void setupCamera(void) {
         bg_rows[1] = 0;
         bg_rows[2] = VIEW_H - CENTRE_Y;
     }
-#else
-    cam_fog = 0x400000;
-#endif
 
     // culling constants, see engine.h. The horizontal view is |x| <= 1.25 z: 4 x against 5 z.
     // Depth: the FARTHEST corner in [NEAR_PLANE, far): a box reaching nearer than the near plane

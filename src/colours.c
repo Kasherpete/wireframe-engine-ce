@@ -25,7 +25,7 @@ const uint8_t palette[32] = {
 // darker shade (the two nibbles of a byte are two LCD pixels), the x sides the darker shade, the
 // bottom darker still. The darker shades follow the PICO-8 palette's own ramps (8 red -> 2 dark
 // purple -> 1 dark blue, ...)
-// Fogged (materials[MAT_FOGGED + m], make fog only): every byte half the face colour, half the
+// Fogged (materials[MAT_FOGGED + m]): every byte half the face colour, half the
 // sky (FOG). With one nibble left, the z side takes the x side's darker shade: walls and tops
 // stay apart, the two wall shades merge in the haze
 #define MAT(m, dark, darker) {(m) * 0x11, (dark) * 0x11, (m) * 0x10 + (dark), (darker) * 0x11}
