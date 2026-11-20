@@ -5,6 +5,7 @@
 #   defaults: bin/DEMOPRGM.8xp, /tmp/cemu_run
 #   KEYS='"key|right","delay|500"'  extra autotester sequence items after launch
 #   SHOTS=12                        number of screenshots (one every 2 s)
+#   FILES="a.8xv b.8xv"             other files to send (default: bin/WORLD.8xv, the world)
 #
 # How it works: boots a clean calculator (TI-OS 5.8 blocks native ASM, so it also sends
 # arTIfiCE as prgmA), runs prgmA via key presses to open the arTIfiCE shell, launches
@@ -28,9 +29,12 @@ stop_cemu() { for p in $(pgrep -x cemu); do kill "$p"; done; }
 stop_cemu; sleep 1
 
 cp "$CLIBS" "$OUT/clibs.8xg"; cp "$ARTIFICE" "$OUT/A.8xp"; cp "$PRG" "$OUT/DEMOPRGM.8xp"
+FILES="${FILES-$( [ -f "$ROOT/bin/WORLD.8xv" ] && echo "$ROOT/bin/WORLD.8xv" || true )}"
+EXTRA=""
+for f in $FILES; do cp "$f" "$OUT/"; EXTRA="$EXTRA, \"$(basename "$f")\""; done
 cat > "$OUT/run.json" <<EOF
 {
-  "transfer_files": ["clibs.8xg", "A.8xp", "DEMOPRGM.8xp"],
+  "transfer_files": ["clibs.8xg", "A.8xp"$EXTRA, "DEMOPRGM.8xp"],
   "target": {"name": "DEMOPRGM", "isASM": true},
   "sequence": [
     "delay|2000", "key|prgm", "delay|500", "key|enter", "delay|300", "key|enter",

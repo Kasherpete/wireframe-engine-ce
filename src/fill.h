@@ -21,11 +21,11 @@
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 
-// Before the wait: front to back over boxes[] (sorted far to near), lists a span for every
+// Before the wait: front to back over boxes[] (sorted near to far), lists a span for every
 // visible part of every box, for the frame drawn at base (draw_buffer_ctrl). Touches no frame
 // buffer, unless the span list fills up: then it waits for the back buffer (waitForBufferScan)
 // and draws the batch so far. Runs with interrupts disabled.
-void fillScene(const projected_box_t *boxes, uint8_t n, uint24_t base);
+void fillScene(const projected_box_t *boxes, uint24_t n, uint24_t base);
 
 // After waitForBufferScan: fills the background (sky above the horizon, ground below) unless
 // boxes cover every column, then draws the spans fillScene listed, and empties the list.
@@ -38,10 +38,12 @@ extern uint8_t lod_slot[64];
 
 // main.c
 void waitForBufferScan(void);
+// the colour byte of the ground below the horizon, 3 times (the world's ground plane)
+extern uint24_t ground_colour3;
 
 #ifdef FILL_REFERENCE
 // fill_ref.c: the C reference. Draws the same frame as fillScene + drawSpans
-void fillSceneRef(const projected_box_t *boxes, uint8_t n, uint24_t base);
+void fillSceneRef(const projected_box_t *boxes, uint24_t n, uint24_t base);
 void drawSpansRef(void);
 #endif
 #endif

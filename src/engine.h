@@ -53,6 +53,10 @@
 #define PB_V         3
 #define PB_SIZE      39    // PB_V + 3 BOX_OUT_LEN
 
+// the occupancy grid of computeExposure (main.c, expose.S): a chunk (8 x 8 cells) and a border
+#define OCC_ROW      10    // bytes per row of x
+#define OCC_LAYER    100   // bytes per layer (y): under 128, so expose.S reads neighbours as (ix + d)
+
 // colour bytes of a material, 4 per entry in materials[]
 #define MAT_TOP      0
 #define MAT_XSIDE    1
@@ -60,7 +64,8 @@
 #define MAT_BOTTOM   3
 #define MAT_COUNT    16
 
-// the background behind every box: sky above the horizon (row CENTRE_Y: there is no pitch), ground below
+// the background behind every box: sky above the horizon (row CENTRE_Y: there is no pitch), ground
+// below: the top colour of the world's ground material, or GROUND_COLOUR if it has no ground plane
 #define SKY_COLOUR     0xcc
 #define GROUND_COLOUR  0x55
 
@@ -70,7 +75,7 @@
 // single pixel: 2 projections and one 1-pixel span instead of 12 projections and up to 3 faces.
 // A box spans about 64 / depth pixels, so at 10 units it is a 6 pixel rectangle. Lower values are
 // faster and blockier; values at or beyond the far plane (TABLE_RENDER_DIST) turn a level off.
-#define LOD_RECT_DIST   12
+#define LOD_RECT_DIST   8
 #define LOD_PIXEL_DIST  24
 
 #ifndef __ASSEMBLER__
@@ -81,7 +86,9 @@
 // ---- per-frame camera state: written by setupCamera() in main.c, read by project.S ----
 // The tables and biases are defined in main.c. The scalars from cam_cos3 on are defined in
 // project.S, next to its locals, so it can address them all through IX.
-// n = X + cam_bias_x is the table index of grid line X-1 (likewise y and z)
+// n = cell + cam_bias_x + 1 is the table index of the grid line at the low side of world cell x
+// (likewise y and z), so n - GRID_RANGE is that cell minus the camera's. A record's x is chunk
+// local: projectRecords adds the chunk's origin to cam_bias_x (main.c, chunk_t)
 extern int24_t cam_bias_x, cam_bias_y, cam_bias_z;
 // rotX_[2n] = XC, rotX_[2n+1] = XS and rotZ_[2n] = ZS, rotZ_[2n+1] = ZC, where XC/XS is
 // (x - player x) * cos/sin for grid line x (and the same for z). camY_[n] = y - player y.
@@ -112,11 +119,13 @@ typedef struct {
     int24_t v[BOX_OUT_LEN];     // screen coordinates, layout above
 } projected_box_t;
 
-// project.S: for each of the n scene records {X, Y, Z, material, exposed FACE_*}: the faces
-// facing the camera and exposed; if any, culls the world voxel [X-1, X] x [Y-1, Y] x [Z-1, Z] and
-// projects it into the next slot of out[]. Returns how many boxes it kept, in record order
+// project.S: for each of the n records {X, Y, Z, material, exposed FACE_*} of a chunk: the faces
+// facing the camera and exposed; if any, culls the voxel and projects it into the next slot of
+// out[], until room boxes are kept. The grid index of a record is X + bias_x, Y + cam_bias_y,
+// Z + bias_z. Returns how many boxes it kept, in record order (0 if n or room is 0)
 extern uint8_t face_x[256], face_y[256], face_z[256];  // FACE_* towards the camera, by grid index
-uint8_t projectRecords(const int8_t (*rec)[5], uint8_t n, projected_box_t *out);
+uint8_t projectRecords(const int8_t (*rec)[5], uint8_t n, projected_box_t *out, uint8_t room,
+                       int24_t bias_x, int24_t bias_z);
 
 // {top, x side, z side, bottom} colour bytes per material (main.c)
 extern const uint8_t materials[MAT_COUNT][4];

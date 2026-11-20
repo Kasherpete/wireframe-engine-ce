@@ -1,16 +1,17 @@
-; sortRecords: the painter sort of the scene (main.c, sortScene).
+; sortRecords: the painter sort of one chunk (main.c, sortChunk).
 ;
 ;   void sortRecords(int8_t (*rec)[5], int8_t (*scratch)[5], uint8_t *keys, uint8_t n,
 ;                    uint8_t bx, uint8_t by, uint8_t bz)
 ;
-; Sorts the n records {X, Y, Z, material, exposed faces} far to near by their Manhattan distance in cells from the
-; camera, gridDist[X + bx] + gridDist[Y + by] + gridDist[Z + bz] with 8-bit adds (main.c explains
-; why the low byte of the grid index is enough). A stable counting sort in three passes over
-; rec, then scratch is copied back over rec. keys must hold n bytes. n must be 1 .. 255.
+; Sorts the n records {X, Y, Z, material, exposed faces} NEAR TO FAR by their Manhattan distance in
+; cells from the camera, gridDist[X + bx] + gridDist[Y + by] + gridDist[Z + bz] with 8-bit adds
+; (main.c explains why the low byte of the grid index is exact). A stable counting sort in three
+; passes over rec, then scratch is copied back over rec. keys must hold n bytes. n must be 1 .. 255.
 ;
-; Measured per sort: 74k cycles for the 153-box test scene (the earlier version with 3-byte start
+; Measured per sort: 74k cycles for a 153-record scene (the earlier version with 3-byte start
 ; pointers: 78k; with 4-byte records it took 5.3k for 7 records and 59k for 120, the same sort in
-; C 7.9k and 127k, the old qsort 41k-48k and 1.1M-1.8M). About 480 cycles per record.
+; C 7.9k and 127k, the old qsort 41k-48k and 1.1M-1.8M). About 480 cycles per record; 43k on
+; average for the chunks of the test world.
 ;
 ; Speed tricks:
 ; - gridDist, the counts and the start indices each begin on a 256-byte boundary, so setting the
@@ -20,7 +21,7 @@
 ; - The start of each key in scratch is kept as a record index (a byte), so the starts of all 256
 ;   possible keys fit one page; placing a record multiplies it by REC_SIZE with mlt.
 ; - Pass 1 also tracks the largest key (in a patched cp), so the prefix pass only visits keys
-;   max .. 0, and for an empty key only tests the count. It clears each used count as it reads
+;   0 .. max, and for an empty key only tests the count. It clears each used count as it reads
 ;   it, so they are all zero again for the next sort without a separate clear.
 ;
 ; ABI: arguments at sp+3 .. sp+21; IX preserved; AF BC DE HL IY clobbered.
@@ -29,11 +30,7 @@
 #include "engine.h"
 
 #define REC_SIZE	5				/* bytes per scene record */
-#define BUCKETS		3 * GRID_RANGE + 1		/* keys 0 .. 3 GRID_RANGE. No parentheses (see CLAUDE.md), so wrap it when multiplying */
-
-#if 3 * GRID_RANGE > 255
-#error "keys are bytes: GRID_RANGE must be at most 85"
-#endif
+/* Keys are bytes: main.c asserts that no key of a loaded chunk exceeds 255 */
 
 ; argument offsets from sp after push ix
 #define A_REC		6
@@ -94,15 +91,15 @@ _sortRecords:
 	lea	iy, iy + REC_SIZE
 	djnz	.Lkey
 
-	; ---- pass 2: the index in scratch where each key starts, farthest key first ----
-	; Only keys max .. 0, and an empty key costs just the test: its start is never read.
+	; ---- pass 2: the index in scratch where each key starts, nearest key first ----
+	; Only keys 0 .. max, and an empty key costs just the test: its start is never read.
 	; hl = counts (l = key), de = starts (e = key), c = next free record index
 	ld	iy, 0
 	add	iy, sp
 	ld	de, .Lstart
 	ld	c, 0
+	ld	l, c
 	ld	a, (.Lmax + 1)
-	ld	l, a
 	ld	b, a
 	inc	b
 .Lprefix:
@@ -110,7 +107,7 @@ _sortRecords:
 	or	a, a
 	jr	nz, .Lused
 .Lnext:
-	dec	l
+	inc	l
 	djnz	.Lprefix
 	jr	.Lplace_start
 
@@ -180,6 +177,6 @@ _sortRecords:
 	.balign	256
 	.global	_gridDist
 _gridDist:	.zero	256		; filled by initGridDist() in main.c
-.Lcount:	.zero	256		; records per key (only BUCKETS used). Zero between sorts
+.Lcount:	.zero	256		; records per key. Zero between sorts
 .Lstart:	.zero	256		; next free record index in scratch per key
 

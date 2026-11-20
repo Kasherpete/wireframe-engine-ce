@@ -1,13 +1,18 @@
 ; projectRecords: cull and project the scene.
 ;
-;   uint8_t projectRecords(const int8_t (*rec)[5], uint8_t n, projected_box_t *out)
+;   uint8_t projectRecords(const int8_t (*rec)[5], uint8_t n, projected_box_t *out, uint8_t room,
+;                          int24_t bias_x, int24_t bias_z)
 ;
-; For each scene record {X, Y, Z, material, exposed faces} in order: the faces facing the camera
-; (face_x/y/z, by grid index) that are also exposed; none, and the box is skipped. Otherwise the
-; world voxel [X-1, X] x [Y-1, Y] x [Z-1, Z] is culled in camera space, its corners projected and
-; the result classified against the viewport (BOX_*, engine.h). Kept boxes go to out[] in scene
-; order, with their faces and material. Returns how many. Reads the per-frame camera state that
-; setupCamera() in main.c writes (layout in engine.h).
+; For each record {X, Y, Z, material, exposed faces} of one chunk, in order: the faces facing the
+; camera (face_x/y/z, by grid index) that are also exposed; none, and the box is skipped. Otherwise
+; the voxel is culled in camera space, its corners projected and the result classified (BOX_*,
+; engine.h). Kept boxes go to out[] in record order, with their faces and material, until room of
+; them are kept. Returns how many. Reads the per-frame camera state that setupCamera() in main.c
+; writes (layout in engine.h).
+;
+; X and Z are chunk local: the grid index of a record is X + bias_x (Z + bias_z, and Y + cam_bias_y),
+; where main.c passes bias_x = cam_bias_x + the x of the first cell of the chunk + 1. The voxel
+; spans the cell whose grid index that is (engine.h).
 ;
 ; Level of detail: a box whose nearest corner is at least cam_lod_rect deep becomes BOX_RECT, the
 ; rectangle of its x and y extent projected at its centre depth (4 projections instead of 12).
@@ -82,7 +87,8 @@
 #define V_CAM_KZMID3	77
 #define V_CAM_LODRECT	80
 #define V_CAM_LODPIX	83
-#define V_SIZE		86
+#define V_ROOM		86
+#define V_SIZE		87
 
 	.assume	ADL = 1
 
@@ -164,8 +170,9 @@
 
 ; grid line (record byte at iy + off) - 1 -> table index 3 n in hl, n checked against
 ; [0, 2 * GRID_RANGE) so n + 1 is in the table too. n = X + bias in 16 bits: X is a byte and the
-; camera cell (so the bias) is an int16, so n is far from wrapping 16 bits and its low 16 bits are
-; in range exactly when n is. The bias is patched into the ld de, nn at label smc. clobbers a, de
+; camera cell and the chunk origin (so the bias) are int16, so n is far from wrapping 16 bits and
+; its low 16 bits are in range exactly when n is. The bias is patched into the ld de, nn at label
+; smc. clobbers a, de
 	.macro	GRID_INDEX off, smc
 	ld	a, (iy + \off)
 	ld	l, a
@@ -191,7 +198,7 @@
 _projectRecords:
 	push	ix
 	ld	iy, 0
-	add	iy, sp			; iy + 6 = rec, iy + 9 = n, iy + 12 = out
+	add	iy, sp			; iy + 6 rec, 9 n, 12 out, 15 room, 18 bias_x, 21 bias_z
 	ld	ix, .Lvars
 	ld	hl, (iy + 6)
 	ld	(VAR(V_REC)), hl
@@ -203,18 +210,25 @@ _projectRecords:
 	or	a, a
 	jp	z, .Lend
 	ld	(VAR(V_LEFT)), a
-	; the camera cell into the face test (self-modifying: the program runs from RAM)
-	ld	a, (_cam_bias_x)
+	ld	a, (iy + 15)
+	or	a, a
+	jp	z, .Lend
+	ld	(VAR(V_ROOM)), a
+	; the biases into the face test and the level of detail side (self-modifying: the program
+	; runs from RAM)
+	ld	a, (iy + 18)
 	ld	(.Lfbx + 1), a
+	ld	(.Llbx + 1), a
 	ld	a, (_cam_bias_y)
 	ld	(.Lfby + 1), a
-	ld	a, (_cam_bias_z)
+	ld	a, (iy + 21)
 	ld	(.Lfbz + 1), a
-	ld	hl, (_cam_bias_x)	; and into the grid index (16 bits matter)
+	ld	(.Llbz + 1), a
+	ld	hl, (iy + 18)		; and into the grid index (16 bits matter)
 	ld	(.Lgbx + 1), hl
 	ld	hl, (_cam_bias_y)
 	ld	(.Lgby + 1), hl
-	ld	hl, (_cam_bias_z)
+	ld	hl, (iy + 21)
 	ld	(.Lgbz + 1), hl
 
 .Lrec:
@@ -312,7 +326,7 @@ _projectRecords:
 	; are also exposed. None: nothing of this box can show ----
 	ld	hl, _face_x
 	ld	a, (iy + 0)
-.Lfbx:	add	a, 0			; + cam_bias_x (patched)
+.Lfbx:	add	a, 0			; + bias_x (patched)
 	ld	l, a
 	ld	c, (hl)
 	inc	h			; face_y (the tables are 1024-aligned: no wrap)
@@ -437,6 +451,8 @@ _projectRecords:
 	lea	iy, iy + PB_SIZE
 	ld	(VAR(V_OUT)), iy
 	inc	(VAR(V_KEPT))
+	dec	(VAR(V_ROOM))
+	jp	z, .Lend		; out[] is full
 .Lskip:
 .Lnext:
 	ld	hl, (VAR(V_REC))
@@ -523,15 +539,15 @@ _projectRecords:
 .Llod_side:
 	ld	hl, (VAR(V_REC))
 	ld	de, _gridDist		; 256-aligned: e is the index
-	ld	a, (_cam_bias_x)
-	add	a, (hl)
+	ld	a, (hl)
+.Llbx:	add	a, 0			; + bias_x (patched)
 	ld	e, a
 	ld	a, (de)
 	ld	c, a			; |dx|
 	inc	hl
 	inc	hl
-	ld	a, (_cam_bias_z)
-	add	a, (hl)
+	ld	a, (hl)
+.Llbz:	add	a, 0			; + bias_z (patched)
 	ld	e, a
 	ld	a, (de)			; |dz|
 	cp	a, c
@@ -638,6 +654,7 @@ _cam_kxmid3:	.zero	3
 _cam_kzmid3:	.zero	3
 _cam_lod_rect:	.zero	3
 _cam_lod_pix:	.zero	3
+.Lroom:		.zero	1			; boxes out[] still has room for
 .Lvars_end:
 	.if	.Lvars_end - .Lvars != V_SIZE || V_SIZE > 128
 	.error	".Lvars does not match V_SIZE, or is too large for (ix + d)"
@@ -729,6 +746,9 @@ _cam_lod_pix:	.zero	3
 	.if	_cam_lod_rect - .Lvars != V_CAM_LODRECT || _cam_lod_pix - .Lvars != V_CAM_LODPIX
 	.error	"V_CAM_LODRECT or V_CAM_LODPIX does not match .Lvars"
 	.endif
+	.if	.Lroom - .Lvars != V_ROOM
+	.error	"V_ROOM does not match .Lvars"
+	.endif
 
 ; Faces of a box towards the camera by the grid index of each axis (main.c, initFaceTables):
 ; three consecutive pages, so inc h steps from one to the next
@@ -738,9 +758,7 @@ _face_x:	.zero	256
 _face_y:	.zero	256
 _face_z:	.zero	256
 
-	.extern	_cam_bias_x
 	.extern	_cam_bias_y
-	.extern	_cam_bias_z
 	.extern	_rotX_
 	.extern	_rotZ_
 	.extern	_camY_

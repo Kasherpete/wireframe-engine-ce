@@ -17,13 +17,19 @@ typedef struct {
     uint8_t len;
     uint8_t colour;
 } span_t;
-static span_t span_list[SPAN_MAX];
+// The span list and the intervals live in DBL_BUF2 above main.c's exposure grid (the bench uses
+// one at a time): bss has no room for them next to the chunks
+#define SPAN_LIST_REF 0xD60E00
+#define GAP_X0_REF    (SPAN_LIST_REF + SPAN_MAX * 5)
+#define GAP_X1_REF    (GAP_X0_REF + VIEW_H * GAP_MAX)
+_Static_assert(GAP_X1_REF + VIEW_H * GAP_MAX <= 0xD65800, "the reference arrays must fit DBL_BUF2");
+#define span_list ((span_t *)SPAN_LIST_REF)
 static span_t *span_end;
 
 // per row: the open x intervals [x0, x1), unordered
 static uint8_t gap_n[VIEW_H];
-static uint8_t gap_x0[VIEW_H][GAP_MAX];
-static uint8_t gap_x1[VIEW_H][GAP_MAX];
+#define gap_x0 ((uint8_t (*)[GAP_MAX])GAP_X0_REF)
+#define gap_x1 ((uint8_t (*)[GAP_MAX])GAP_X1_REF)
 static uint8_t open_rows;       // rows with at least one open interval
 static uint8_t *row0;           // first viewport column of row 0 in the frame being drawn
 
@@ -119,7 +125,7 @@ static void coverRow(uint8_t y, uint8_t xl, uint8_t xr, uint8_t colour) {
                     g1s[n] = g1;
                     n++;
                 } else {
-                    emit(y, b, g1, y < CENTRE_Y ? SKY_COLOUR : GROUND_COLOUR);  // see fill.S
+                    emit(y, b, g1, y < CENTRE_Y ? SKY_COLOUR : (uint8_t)ground_colour3);  // see fill.S
                 }
                 break;
             }
@@ -242,7 +248,7 @@ static void fillBox(const projected_box_t *p) {
     }
 }
 
-void fillSceneRef(const projected_box_t *boxes, uint8_t n, uint24_t base) {
+void fillSceneRef(const projected_box_t *boxes, uint24_t n, uint24_t base) {
     row0 = (uint8_t *)base + VIEW_X0;
     span_end = span_list;
     for (uint8_t y = 0; y < VIEW_H; y++) {
@@ -252,15 +258,15 @@ void fillSceneRef(const projected_box_t *boxes, uint8_t n, uint24_t base) {
     }
     open_rows = VIEW_H;
 
-    // front to back: boxes[] is sorted far to near
-    for (const projected_box_t *p = boxes + n; p != boxes && open_rows != 0; ) {
-        fillBox(--p);
+    // front to back: boxes[] is sorted near to far
+    for (const projected_box_t *p = boxes; p != boxes + n && open_rows != 0; p++) {
+        fillBox(p);
     }
 
     for (uint8_t y = 0; y < VIEW_H; y++) {
         roomForRow();
         for (uint8_t i = 0; i < gap_n[y]; i++) {
-            emit(y, gap_x0[y][i], gap_x1[y][i], y < CENTRE_Y ? SKY_COLOUR : GROUND_COLOUR);
+            emit(y, gap_x0[y][i], gap_x1[y][i], y < CENTRE_Y ? SKY_COLOUR : (uint8_t)ground_colour3);
         }
     }
 }

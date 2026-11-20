@@ -10,9 +10,24 @@
 
 #include <sys/lcd.h>
 #include <string.h>
+#include <ti/screen.h>
+#include <ti/getcsc.h>
 
 #include "engine.h"
 #include "fill.h"
+#include "world.h"
+
+// Timer 2 counts CPU cycles (48 MHz) and is left free-running ("make hud" builds only; otherwise
+// CYCLES() is 0 and the profiling compiles away). Read the low 24 bits directly: timer_Get() hangs
+// with TIMER_CPU (see CLAUDE.md). Differences of two reads are correct across the 24-bit wrap as
+// long as the interval is under 2^24 cycles (349 ms)
+#ifdef SHOW_HUD
+#define CYCLES() (*(volatile uint24_t *)TIMER_COUNT_ADDR(2))
+#define PROF(...) __VA_ARGS__
+#else
+#define CYCLES() 0
+#define PROF(...)
+#endif
 
 
 #define SCREEN_OFFSET ((GFX_LCD_WIDTH - VIEWPORT_LENGTH) / 2)  // first viewport column (0: full width)
@@ -82,174 +97,6 @@ const uint8_t materials[MAT_COUNT][4] = {
     MAT(12, 13, 5),  MAT(13, 5, 1),   MAT(14, 8, 2),   MAT(15, 14, 8),
 };
 
-// the scene: x, y, z of each voxel (it spans [X-1, X] x [Y-1, Y] x [Z-1, Z]) and its material
-// (index into materials[], 0 .. MAT_COUNT - 1). The fifth byte is filled in by computeExposure().
-// If the scene changes at runtime, call computeExposure() again
-// static int8_t coordinates[][5] = {
-//         {5, -2, 5, 4},
-//         {5, -1, 5, 4},
-//         {5, 0, 5, 4},
-//         {4, -3, 5, 3},
-//         {6, -3, 5, 3},
-//         {5, -3, 4, 3},
-//         {5, -3, 6, 3},
-// };
-
-static int8_t coordinates[][5] = {
-    {-5, 1, -3, 3},
-    {-5, 1, -2, 11},
-    {-5, 1, -1, 3},
-    {-5, 1, 0, 11},
-    {-5, 1, 1, 3},
-    {-5, 1, 2, 11},
-    {-5, 1, 3, 3},
-    {-5, 1, 4, 11},
-    {-5, 1, 5, 3},
-    {-5, 1, 6, 11},
-    {-5, 1, 7, 3},
-    {-4, 1, -3, 11},
-    {-4, 1, -2, 3},
-    {-4, 1, -1, 11},
-    {-4, 1, 0, 3},
-    {-4, 1, 1, 11},
-    {-4, 1, 2, 3},
-    {-4, 1, 3, 11},
-    {-4, 1, 4, 3},
-    {-4, 1, 5, 11},
-    {-4, 1, 6, 3},
-    {-4, 1, 7, 11},
-    {-3, 1, -3, 3},
-    {-3, 1, -2, 11},
-    {-3, 1, -1, 3},
-    {-3, 1, 0, 11},
-    {-3, 1, 1, 3},
-    {-3, 1, 2, 11},
-    {-3, 1, 3, 3},
-    {-3, 1, 4, 11},
-    {-3, 1, 5, 3},
-    {-3, 1, 6, 11},
-    {-3, 1, 7, 3},
-    {-2, 1, -3, 11},
-    {-2, 1, -2, 3},
-    {-2, 1, -1, 11},
-    {-2, 1, 0, 3},
-    {-2, 1, 1, 11},
-    {-2, 1, 2, 3},
-    {-2, 1, 3, 11},
-    {-2, 1, 4, 3},
-    {-2, 1, 5, 11},
-    {-2, 1, 6, 3},
-    {-2, 1, 7, 11},
-    {-1, 1, -3, 3},
-    {-1, 1, -2, 11},
-    {-1, 1, -1, 3},
-    {-1, 1, 0, 11},
-    {-1, 1, 1, 3},
-    {-1, 1, 2, 11},
-    {-1, 1, 3, 3},
-    {-1, 1, 4, 11},
-    {-1, 1, 5, 3},
-    {-1, 1, 6, 11},
-    {-1, 1, 7, 3},
-    {0, 1, -3, 11},
-    {0, 1, -2, 3},
-    {0, 1, -1, 11},
-    {0, 1, 0, 3},
-    {0, 1, 1, 11},
-    {0, 1, 2, 3},
-    {0, 1, 3, 11},
-    {0, 1, 4, 3},
-    {0, 1, 5, 11},
-    {0, 1, 6, 3},
-    {0, 1, 7, 11},
-    {1, 1, -3, 3},
-    {1, 1, -2, 11},
-    {1, 1, -1, 3},
-    {1, 1, 0, 11},
-    {1, 1, 1, 3},
-    {1, 1, 2, 11},
-    {1, 1, 3, 3},
-    {1, 1, 4, 11},
-    {1, 1, 5, 3},
-    {1, 1, 6, 11},
-    {1, 1, 7, 3},
-    {2, 1, -3, 11},
-    {2, 1, -2, 3},
-    {2, 1, -1, 11},
-    {2, 1, 0, 3},
-    {2, 1, 1, 11},
-    {2, 1, 2, 3},
-    {2, 1, 3, 11},
-    {2, 1, 4, 3},
-    {2, 1, 5, 11},
-    {2, 1, 6, 3},
-    {2, 1, 7, 11},
-    {3, 1, -3, 3},
-    {3, 1, -2, 11},
-    {3, 1, -1, 3},
-    {3, 1, 0, 11},
-    {3, 1, 1, 3},
-    {3, 1, 2, 11},
-    {3, 1, 3, 3},
-    {3, 1, 4, 11},
-    {3, 1, 5, 3},
-    {3, 1, 6, 11},
-    {3, 1, 7, 3},
-    {4, 1, -3, 11},
-    {4, 1, -2, 3},
-    {4, 1, -1, 11},
-    {4, 1, 0, 3},
-    {4, 1, 1, 11},
-    {4, 1, 2, 3},
-    {4, 1, 3, 11},
-    {4, 1, 4, 3},
-    {4, 1, 5, 11},
-    {4, 1, 6, 3},
-    {4, 1, 7, 11},
-    {5, 1, -3, 3},
-    {5, 1, -2, 11},
-    {5, 1, -1, 3},
-    {5, 1, 0, 11},
-    {5, 1, 1, 3},
-    {5, 1, 2, 11},
-    {5, 1, 3, 3},
-    {5, 1, 4, 11},
-    {5, 1, 5, 3},
-    {5, 1, 6, 11},
-    {5, 1, 7, 3},
-    {-3, 0, 2, 6},
-    {-3, -1, 2, 6},
-    {-3, 0, 3, 6},
-    {-3, -1, 3, 6},
-    {-3, 0, 4, 6},
-    {-3, -1, 4, 6},
-    {-3, 0, 5, 6},
-    {-3, -1, 5, 6},
-    {-3, 0, 6, 6},
-    {-3, -1, 6, 6},
-    {-3, 0, 7, 6},
-    {-3, -1, 7, 6},
-    {3, 0, 0, 8},
-    {3, -1, 0, 8},
-    {3, -2, 0, 8},
-    {3, -3, 0, 8},
-    {0, -4, 4, 12},
-    {1, -4, 4, 12},
-    {2, -4, 4, 12},
-    {1, -4, 5, 12},
-    {5, -2, 5, 4},
-    {5, -1, 5, 4},
-    {5, 0, 5, 4},
-    {4, -3, 5, 11},
-    {6, -3, 5, 11},
-    {5, -3, 4, 11},
-    {5, -3, 6, 11},
-    {-8, 0, 14, 9},
-    {-4, 0, 14, 9},
-    {0, 0, 14, 9},
-    {4, 0, 14, 9},
-    {8, 0, 14, 9}
-};
 
 
 
@@ -330,8 +177,17 @@ void swapBuffer() {
 }
 
 
+// ---- the world in chunks ----
+// The world file (world.h) is split into chunk columns of CHUNK_SIZE x CHUNK_SIZE cells, of any
+// height. The 5 x 5 chunks around the camera's chunk (the window) are kept in RAM, in chunks[], as
+// records {x, Y, z, material, exposed FACE_*} that projectRecords reads directly: x and z are
+// local to the chunk (0 .. 7), Y is the world y cell + 1 (the voxel spans [Y-1, Y], y down).
+// When the camera moves into another chunk, updateWindow() loads the chunks that came into the
+// window from the file, over the ones that left it. With the far plane at GRID_RANGE = 16 cells
+// and the camera anywhere in the centre chunk, every cell within the far plane is in the window.
+//
 // ---- painter's order ----
-// Boxes are drawn far to near by their Manhattan distance in grid cells from the camera's cell,
+// Boxes are drawn near to far by their Manhattan distance in grid cells from the camera's cell,
 // |dx| + |dy| + |dz|. For unit voxels on a grid this is an exact painter's order: if box A hides
 // part of box B, the sight line from the camera to B passes through A, and along a line every
 // coordinate is monotonic, so on each axis A's cell lies between the camera's cell and B's. A's
@@ -339,74 +195,308 @@ void swapBuffer() {
 // either way. Camera depth (z) is not a valid key: two boxes side by side at the same depth can
 // overlap on screen.
 //
-// fill.S walks the list backwards, NEAR TO FAR, and keeps track of what is already covered: the
-// same order read the other way round, so a box is only drawn where nothing nearer is.
+// Across chunks the same argument works with chunk coordinates: a chunk is a range of cells, so
+// on each axis A's chunk lies between the camera's chunk and B's too. Visiting chunks by their
+// Manhattan distance in chunks (visit_order), and the boxes of each chunk by their distance in
+// cells, is therefore also an exact order: if A hides B, A's chunk distance is at most B's, and if
+// they are equal then on every axis A's chunk equals B's (it lies between the camera's and B's, at
+// the same distance), so they are in the same chunk and the sort inside it puts A first.
 //
-// The key only depends on which cell the camera is in, not on its yaw or position inside the cell,
-// so the order only changes when the camera crosses into another cell. main() then calls
-// sortScene(), which reorders coordinates[] itself. projectScene() keeps boxes in list order, so
-// the boxes it keeps come out already sorted and a frame without a re-sort pays nothing for it.
-// Walking at full speed crosses about 4 cells per second (up to 6 diagonally); standing still or
-// turning never re-sorts.
+// fill.S takes the boxes in this order, keeping track of what is already covered, so a box is
+// only drawn where nothing nearer is. Near to far also means that when projected[] is full, the
+// boxes left out are the farthest.
 //
-// sortScene() calls sortRecords() in sort.S: a counting sort (stable, no comparisons) over keys
-// 0 .. 3 GRID_RANGE, through a scratch copy. 74k cycles for the 153-box test scene.
+// The order of a chunk only depends on which cell the camera is in, not on its yaw or position
+// inside the cell. And on an axis where the camera is outside the chunk's range of cells, moving
+// the camera changes every key of the chunk by the same amount, which leaves the order as it is.
+// So a chunk is only re-sorted (sortChunk) when the camera moved into another cell on an axis
+// where it is inside the chunk's range, and only when the chunk is about to be drawn. Walking
+// crosses about 4 cells per second, and each crossing re-sorts the few visible chunks the camera
+// is level with.
+//
+// sortChunk() calls sortRecords() in sort.S: a counting sort (stable, no comparisons) over byte
+// keys, through a scratch copy. About 480 cycles per record.
 
-// gridDist[n] = |n - GRID_RANGE|: the distance in cells along one axis, for the grid index
-// n = X + cam_bias_x (the one projectRecords() uses). The box spans cell X - 1 and the camera is in
-// cell (player x >> 16), so n - GRID_RANGE is their difference (likewise y and z).
-// It is indexed by the low byte of n only, so all 256 entries exist. For every box
-// projectRecords() keeps, n is in [0, 2 GRID_RANGE) and the low byte is n itself. For a culled box the low byte
-// may wrap to any entry, which is harmless: where a culled box sorts does not matter. So the key
-// is three 8-bit adds and lookups, with no sign extension or range check. Defined in sort.S,
-// page-aligned
+#define WINDOW       5               // chunks per side of the window
+#define WINDOW_HALF  2
+#define WINDOW_N     (WINDOW * WINDOW)
+#define CHUNK_NONE   0x7fffff        // chunk_t.cx of a slot nothing was loaded into
+#define MAX_PROJECTED 400            // boxes projected per frame (the farthest are dropped)
+
+_Static_assert(WINDOW == 2 * WINDOW_HALF + 1, "the window is centred on the camera's chunk");
+_Static_assert(WINDOW_HALF * CHUNK_SIZE >= GRID_RANGE, "the window must reach the far plane from anywhere in its centre chunk");
+
+// The camera's y cell is assumed to stay in CAM_Y_MIN .. CAM_Y_MAX (on the ground, crouching or
+// jumping; there is no flying). Sort keys are then exact bytes: see initGridDist
+#define CAM_Y_MIN    -4
+#define CAM_Y_MAX    0
+#define MAX_DXZ      ((WINDOW_HALF + 1) * CHUNK_SIZE - 1)                     // |dx|, |dz| in the window
+#define MAX_DY       MAX(WORLD_Y_MAX - CAM_Y_MIN, CAM_Y_MAX - WORLD_Y_MIN)     // |dy|
+_Static_assert(MAX_DXZ <= 127 && MAX_DY <= 127, "gridDist is exact up to 127 cells");
+_Static_assert(2 * MAX_DXZ + MAX_DY <= 255, "sort keys are bytes");
+
+typedef struct {
+    int24_t cx, cz;                  // world chunk coordinates (CHUNK_NONE: nothing loaded yet)
+    int24_t ox, oz;                  // 8 cx + 1, 8 cz + 1: + cam_bias_x/z is the bias of its records
+    uint8_t n;                       // voxels
+    int8_t  ymin, ymax;              // range of the records' Y (n > 0). Adjacent: copyVoxels
+    uint8_t sorted;                  // the order is the one for sort_rx/ry/rz (sortChunk)
+    int24_t sort_rx, sort_ry, sort_rz;
+    int8_t  rec[CHUNK_MAX][5];       // {x, Y, z, material, exposed FACE_*}
+} chunk_t;
+
+static chunk_t  chunks[WINDOW_N];    // chunk (cx, cz) lives in slot (cx mod 5) * 5 + (cz mod 5)
+static chunk_t *win[WINDOW_N];       // the chunk at window position (dz + 2) * 5 + (dx + 2)
+static int24_t  win_cx, win_cz;      // the camera chunk the window is centred on
+static uint8_t  visit_order[WINDOW_N];  // window positions by distance from the centre (initWindow)
+
+// the camera's cell, and the sin and cos of its yaw (x SUB) (setupCamera)
+static int24_t cam_cell_x, cam_cell_y, cam_cell_z;
+static int24_t cam_sin, cam_cos;
+
+// profiling ("make hud" and the bench only: PROF() compiles away otherwise)
+PROF(
+static uint24_t prof_sorts, prof_loads, prof_chunks, prof_records;
+static uint32_t prof_sort_cycles, prof_load_cycles, prof_cull_cycles, prof_proj_cycles;
+)
+
+
+// gridDist[n] = |d| for d = n - GRID_RANGE as a signed byte: the distance in cells along one axis
+// for the low byte of the grid index n (projectRecords' index: n - GRID_RANGE is the box cell
+// minus the camera's). Exact for |d| <= 127, which covers every record of the window (MAX_DXZ,
+// MAX_DY above), so the key of every record is exact, culled or not: sortChunk relies on it.
+// Defined in sort.S, page-aligned
 extern uint8_t gridDist[256];
 
 static void initGridDist(void) {
     uint8_t n = 0;
     do {
-        gridDist[n] = (n >= 2 * GRID_RANGE) ? GRID_RANGE : (n < GRID_RANGE) ? GRID_RANGE - n : n - GRID_RANGE;
+        const int8_t d = (int8_t)(uint8_t)(n - GRID_RANGE);
+        gridDist[n] = (uint8_t)(d < 0 ? -d : d);
     } while (++n != 0);
 }
 
-_Static_assert(3 * GRID_RANGE < 256, "distance keys are bytes");
-_Static_assert(LEN(coordinates) <= 255, "sortScene counts and indexes the scene in bytes");
 
-static int8_t  sort_scratch[LEN(coordinates)][5];
-static uint8_t sort_key[LEN(coordinates)];
-static int24_t sorted_bias_x, sorted_bias_y, sorted_bias_z;  // the camera cell coordinates[] is sorted for
+static int8_t  sort_scratch[CHUNK_MAX][5];
+static uint8_t sort_key[CHUNK_MAX];
 
-// sort.S: sorts the n records far to near for camera biases bx, by, bz (the low bytes of
-// cam_bias_*), through scratch[n] and keys[n]. n must be 1 .. 255
+// sort.S: sorts the n records near to far for camera biases bx, by, bz (the low bytes of the
+// grid index biases), through scratch[n] and keys[n]. n must be 1 .. 255
 void sortRecords(int8_t (*rec)[5], int8_t (*scratch)[5], uint8_t *keys, uint8_t n,
                  uint8_t bx, uint8_t by, uint8_t bz);
 
-_Static_assert(LEN(coordinates) >= 1, "sortRecords needs at least one record");
+// Where the camera cell c is relative to the cells lo .. hi on one axis: below, above, or the
+// offset inside. The order of a chunk only changes when one of these does (see Painter's order)
+#define REL_BELOW  -1
+#define REL_ABOVE  0x7fff
+static int24_t sortRel(int24_t c, int24_t lo, int24_t hi) {
+    if (c < lo) {
+        return REL_BELOW;
+    }
+    if (c > hi) {
+        return REL_ABOVE;
+    }
+    return c - lo;
+}
 
-// Sorts coordinates[] far to near from the camera cell setupCamera() last set up
-static void sortScene(void) {
-
-    sortRecords(coordinates, sort_scratch, sort_key, LEN(coordinates),
-                (uint8_t)cam_bias_x, (uint8_t)cam_bias_y, (uint8_t)cam_bias_z);
-    sorted_bias_x = cam_bias_x;
-    sorted_bias_y = cam_bias_y;
-    sorted_bias_z = cam_bias_z;
+// Sorts the records of ch near to far from the camera cell, unless their order is already right
+// for it. ch->n must be at least 1. Ifs, not a combined 0/1 value: see the compiler bug in CLAUDE.md
+static void sortChunk(chunk_t *ch) {
+    const int24_t rx = sortRel(cam_cell_x, ch->ox - 1, ch->ox + CHUNK_SIZE - 2);
+    const int24_t ry = sortRel(cam_cell_y, ch->ymin - 1, ch->ymax - 1);
+    const int24_t rz = sortRel(cam_cell_z, ch->oz - 1, ch->oz + CHUNK_SIZE - 2);
+    if (ch->sorted) {
+        if (rx == ch->sort_rx) {
+            if (ry == ch->sort_ry) {
+                if (rz == ch->sort_rz) {
+                    return;
+                }
+            }
+        }
+    }
+    PROF(const uint24_t t = CYCLES();)
+    sortRecords(ch->rec, sort_scratch, sort_key, ch->n, (uint8_t)(cam_bias_x + ch->ox),
+                (uint8_t)cam_bias_y, (uint8_t)(cam_bias_z + ch->oz));
+    PROF(prof_sort_cycles += CYCLES() - t; prof_sorts++;)
+    ch->sort_rx = rx;
+    ch->sort_ry = ry;
+    ch->sort_rz = rz;
+    ch->sorted = 1;
 }
 
 
-// whether the camera is in another cell than coordinates[] was sorted for (the biases change
-// exactly when the cell does). Ifs, not a combined 0/1 value: see the compiler bug in CLAUDE.md
-static uint8_t sceneOrderStale(void) {
-    if (cam_bias_x != sorted_bias_x) {
-        return 1;
+// chunk.S: the n file voxels as records {x, y + 1, z, material, faces}, and the least and greatest
+// record Y in yrange[0] and [1]
+void copyVoxels(int8_t (*rec)[5], const world_voxel_t *v, uint8_t n, int8_t *yrange);
+
+// Copies chunk (cx, cz) from the world file into ch (an empty chunk outside the world)
+static void loadChunk(chunk_t *ch, int24_t cx, int24_t cz) {
+    uint8_t n;
+    const world_voxel_t *v = worldChunk(cx, cz, &n);
+    ch->cx = cx;
+    ch->cz = cz;
+    ch->ox = (cx << 3) + 1;
+    ch->oz = (cz << 3) + 1;
+    ch->n = n;
+    ch->sorted = 0;
+    copyVoxels(ch->rec, v, n, &ch->ymin);
+}
+
+
+// ---- exposure ----
+// Faces that no other voxel covers: a face shared with a neighbouring voxel can never be seen,
+// so projectRecords never hands it to the rasterizer. A floor then costs one face per voxel
+// instead of three. Stored in rec[i][4] as FACE_* bits. With a ground plane, everything at
+// y >= 0 counts as solid: a voxel standing on the ground has no bottom face, a path tile only a top.
+//
+// The world file stores every voxel's faces (make_world.py computes them with the whole world at
+// hand), so loading a chunk is a copy. computeExposure is for runtime changes: after changing the
+// records of the chunk at window position w (and clearing its chunk_t.sorted, and updating
+// ymin/ymax), call it for w and for its 4 neighbours. It must give exactly what make_world.py
+// gives (the bench checks that).
+//
+// computeExposure(w) marks the chunk, and the voxels of its 4 neighbours that touch it, in an
+// occupancy grid: the chunk's cells plus a border of one, from one layer above its highest voxel
+// to one below its lowest (and every cell at y >= 0 with a ground plane). Then each voxel looks at
+// its 6 neighbouring cells. A neighbour chunk outside the window counts as empty: the faces
+// towards it point away from the camera (the camera is in the centre chunk), so they are never
+// drawn anyway. The grid is in DBL_BUF2, the VRAM frame shown only during init_screen.
+#define OCC          ((uint8_t *)DBL_BUF2)
+#define OCC_LAYERS   (WORLD_Y_MAX - WORLD_Y_MIN + 3)          // y: a chunk's range, plus one each side
+_Static_assert(OCC_ROW == CHUNK_SIZE + 2 && OCC_LAYER == OCC_ROW * OCC_ROW, "x and z: -1 .. 8");
+// (fill_ref.c keeps its span list in DBL_BUF2 from 0x4C00 on)
+_Static_assert(OCC_ROW + 1 + OCC_LAYERS * OCC_LAYER <= 0x4C00, "the occupancy grid must fit the start of DBL_BUF2");
+
+// occ_layer[L]: the address of cell (x 0, layer L, z 0), so cell (x, L, z) is at
+// occ_layer[L] + OCC_ROW z + x for x and z from -1 to CHUNK_SIZE. Layer L is Y - ymin + 1
+uint8_t *occ_layer[OCC_LAYERS];
+
+static void initOccupancy(void) {
+    uint8_t *p = OCC + OCC_ROW + 1;
+    for (uint8_t i = 0; i < OCC_LAYERS; i++) {
+        occ_layer[i] = p;
+        p += OCC_LAYER;
     }
-    if (cam_bias_y != sorted_bias_y) {
-        return 1;
+}
+
+// chunk.S, layer L = Y - ybase (n may be 0):
+// occMark sets the cell of each record to 1.
+// occNeighbour marks the records of a neighbour chunk whose coordinate axis (0: x, 2: z) is edge
+// and whose layer is 1 .. ylen, at offset `at` (x = -1 or CHUNK_SIZE; for z, that times OCC_ROW).
+// occExpose stores the FACE_* bits of each record's empty neighbour cells in rec[i][4].
+void occMark(const int8_t (*rec)[5], uint8_t n, uint8_t ybase);
+void occNeighbour(const int8_t (*rec)[5], uint8_t n, uint8_t axis, uint8_t edge, int24_t at,
+                  uint8_t ybase, uint8_t ylen);
+void occExpose(int8_t (*rec)[5], uint8_t n, uint8_t ybase);
+
+void computeExposure(uint8_t w) {
+    chunk_t *ch = win[w];
+    if (ch->n == 0) {
+        return;
     }
-    if (cam_bias_z != sorted_bias_z) {
-        return 1;
+    const int8_t ymin = ch->ymin, ymax = ch->ymax;
+    const uint8_t ybase = (uint8_t)(ymin - 1);
+    // layers 0 .. ymax - ymin + 2 (at most OCC_LAYERS - 1), from cell (-1, 0, -1). With a ground
+    // plane, the layers of Y >= 1 (y cell >= 0) are all solid
+    const uint8_t last = (uint8_t)(ymax - ymin + 2);
+    uint8_t *const start = occ_layer[0] - OCC_ROW - 1;
+    uint8_t *const end = occ_layer[last] + OCC_LAYER - OCC_ROW - 1;
+    uint8_t *solid = end;                   // the first solid layer
+    if (world->ground != WORLD_NO_GROUND) {
+        const int24_t l = 2 - (int24_t)ymin;    // the layer of Y = 1
+        if (l <= 0) {
+            solid = start;
+        } else if (l <= last) {
+            solid = occ_layer[l] - OCC_ROW - 1;
+        }
     }
-    return 0;
+    memset(start, 0, (size_t)(solid - start));
+    memset(solid, 1, (size_t)(end - solid));
+
+    const uint8_t ylen = (uint8_t)(ymax - ymin + 1);
+
+    occMark(ch->rec, ch->n, ybase);
+    const uint8_t wx = w % WINDOW;
+    if (wx > 0) {
+        const chunk_t *nb = win[w - 1];
+        occNeighbour(nb->rec, nb->n, 0, CHUNK_SIZE - 1, -1, ybase, ylen);
+    }
+    if (wx < WINDOW - 1) {
+        const chunk_t *nb = win[w + 1];
+        occNeighbour(nb->rec, nb->n, 0, 0, CHUNK_SIZE, ybase, ylen);
+    }
+    if (w >= WINDOW) {
+        const chunk_t *nb = win[w - WINDOW];
+        occNeighbour(nb->rec, nb->n, 2, CHUNK_SIZE - 1, -OCC_ROW, ybase, ylen);
+    }
+    if (w < WINDOW_N - WINDOW) {
+        const chunk_t *nb = win[w + WINDOW];
+        occNeighbour(nb->rec, nb->n, 2, 0, CHUNK_SIZE * OCC_ROW, ybase, ylen);
+    }
+    occExpose(ch->rec, ch->n, ybase);
+}
+
+
+// ---- the window ----
+
+// visit_order: the window positions by Manhattan distance from the centre, nearest first
+static void initWindow(void) {
+    uint8_t k = 0;
+    for (uint8_t d = 0; d <= 2 * WINDOW_HALF; d++) {
+        for (uint8_t w = 0; w < WINDOW_N; w++) {
+            const int8_t dx = (int8_t)(w % WINDOW) - WINDOW_HALF, dz = (int8_t)(w / WINDOW) - WINDOW_HALF;
+            if ((dx < 0 ? -dx : dx) + (dz < 0 ? -dz : dz) == d) {
+                visit_order[k++] = w;
+            }
+        }
+    }
+    for (uint8_t i = 0; i < WINDOW_N; i++) {
+        chunks[i].cx = CHUNK_NONE;
+    }
+    win_cx = CHUNK_NONE;
+}
+
+// v mod 5 in 0 .. 4 (a division: once per axis and window update)
+static uint8_t mod5(int24_t v) {
+    const int24_t m = v % WINDOW;
+    return (uint8_t)(m < 0 ? m + WINDOW : m);
+}
+
+// Centres the window on chunk (cx, cz): loads the chunks that are new in it (their exposure is in
+// the file). At startup that is all 25; crossing into a neighbouring chunk, 5
+static void updateWindow(int24_t cx, int24_t cz) {
+    PROF(const uint24_t t = CYCLES();)
+    uint8_t w = 0;
+    const uint8_t mx0 = mod5(cx - WINDOW_HALF);
+    uint8_t mz = mod5(cz - WINDOW_HALF);
+    for (int24_t dz = -WINDOW_HALF; dz <= WINDOW_HALF; dz++) {
+        uint8_t mx = mx0;
+        for (int24_t dx = -WINDOW_HALF; dx <= WINDOW_HALF; dx++, w++) {
+            chunk_t *ch = &chunks[mx * WINDOW + mz];
+            if (++mx == WINDOW) {
+                mx = 0;
+            }
+            win[w] = ch;
+            if (ch->cx != cx + dx || ch->cz != cz + dz) {
+                loadChunk(ch, cx + dx, cz + dz);
+            }
+        }
+        if (++mz == WINDOW) {
+            mz = 0;
+        }
+    }
+    win_cx = cx;
+    win_cz = cz;
+    PROF(prof_load_cycles += CYCLES() - t; prof_loads++;)
+}
+
+// the camera's chunk changed (setupCamera has run): move the window with it
+static void followCamera(void) {
+    const int24_t cx = cam_cell_x >> 3, cz = cam_cell_z >> 3;
+    _Static_assert(CHUNK_SIZE == 8, "chunk of a cell");
+    if (cx != win_cx || cz != win_cz) {
+        updateWindow(cx, cz);
+    }
 }
 
 
@@ -493,6 +583,11 @@ static void setupCamera(void) {
     cam_bias_x = GRID_RANGE - 1 - cell_x;
     cam_bias_y = GRID_RANGE - 1 - cell_y;
     cam_bias_z = GRID_RANGE - 1 - cell_z;
+    cam_cell_x = cell_x;
+    cam_cell_y = cell_y;
+    cam_cell_z = cell_z;
+    cam_sin = s;
+    cam_cos = c;
     const int24_t fx = (int24_t)(player_x >> 8) & 0xff;
     const int24_t fy = (int24_t)(player_y >> 8) & 0xff;
     const int24_t fz = (int24_t)(player_z >> 8) & 0xff;
@@ -539,62 +634,17 @@ _Static_assert(__builtin_offsetof(projected_box_t, mat) == PB_MAT, "engine.h PB_
 _Static_assert(__builtin_offsetof(projected_box_t, v) == PB_V, "engine.h PB_V out of sync");
 #endif
 
-static projected_box_t projected[LEN(coordinates)];
-static uint8_t num_projected;
-
-
-// Faces that no other voxel covers: a face shared with a neighbouring voxel can never be seen,
-// so projectScene() never hands it to the rasterizer. A floor then costs one face per voxel
-// instead of three. Stored in coordinates[i][4] as FACE_* bits. Every pair once: n^2 / 2 tests,
-// about 40 ms at startup for 255 voxels
-static void computeExposure(void) {
-    for (uint8_t i = 0; i < LEN(coordinates); i++) {
-        coordinates[i][4] = FACE_XP | FACE_XN | FACE_ZP | FACE_ZN | FACE_TOP | FACE_BOT;
-    }
-    for (uint8_t i = 0; i < LEN(coordinates); i++) {
-        int8_t *a = coordinates[i];
-        for (uint8_t j = i + 1; j < LEN(coordinates); j++) {
-            int8_t *b = coordinates[j];
-            const int8_t dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
-            // ifs, not a combined test: see the compiler bug in CLAUDE.md
-            if (dy == 0 && dz == 0) {
-                if (dx == 1) {
-                    a[4] &= ~FACE_XP;
-                    b[4] &= ~FACE_XN;
-                } else if (dx == -1) {
-                    a[4] &= ~FACE_XN;
-                    b[4] &= ~FACE_XP;
-                }
-            } else if (dx == 0 && dy == 0) {
-                if (dz == 1) {
-                    a[4] &= ~FACE_ZP;
-                    b[4] &= ~FACE_ZN;
-                } else if (dz == -1) {
-                    a[4] &= ~FACE_ZN;
-                    b[4] &= ~FACE_ZP;
-                }
-            } else if (dx == 0 && dz == 0) {
-                if (dy == -1) {             // b is above a: a's top face is covered
-                    a[4] &= ~FACE_TOP;
-                    b[4] &= ~FACE_BOT;
-                } else if (dy == 1) {
-                    a[4] &= ~FACE_BOT;
-                    b[4] &= ~FACE_TOP;
-                }
-            }
-        }
-    }
-}
+static projected_box_t projected[MAX_PROJECTED];
+static uint24_t num_projected;
 
 
 // The faces of a box that face the camera (FACE_*), from d = box cell - camera cell on each axis:
 // the +x face (at X) faces the camera exactly when the camera is in a cell right of the box's, and
 // so on; d = 0 means the camera is level with the box on that axis, so neither face is visible.
-// With n = X + cam_bias_x (the grid index projectRecords uses) d is n - GRID_RANGE, so the bits are
-// tables indexed by the low byte of n: three 8-bit adds and lookups per box. n wraps for boxes
-// beyond GRID_RANGE, which projectRecords culls before it looks (as in sortRecords). C with int24
-// compares cost about 1k cycles per box. face_x, face_y and face_z are in project.S, on
-// consecutive pages
+// With n the grid index projectRecords uses, d is n - GRID_RANGE, so the bits are tables indexed
+// by the low byte of n: three 8-bit adds and lookups per box. n wraps for boxes beyond GRID_RANGE,
+// which projectRecords culls before it looks (as in sortRecords). C with int24 compares cost
+// about 1k cycles per box. face_x, face_y and face_z are in project.S, on consecutive pages
 
 // n >= 2 GRID_RANGE: a box projectRecords culls, so no faces (ifs: see the compiler bug in CLAUDE.md)
 static void initFaceTables(void) {
@@ -615,14 +665,89 @@ static void initFaceTables(void) {
 }
 
 
-// Culls and projects every box into projected[], without drawing. Boxes stay in the order of
-// coordinates[], which sortScene() keeps far to near. A box with no face both towards the camera
-// and not covered by a neighbour is skipped before projecting (its silhouette is covered by
-// nearer neighbours). The loop, the face test and the projection are all in project.S: in C the
-// loop and the call cost about 650 cycles per record. main() calls this before waitForBufferScan(),
-// so it runs in time that would otherwise be spent waiting for the LCD
+// ---- chunk culling ----
+// A chunk column is skipped when no voxel in it could pass projectRecords' culling: its corners'
+// camera-space bounding box (x and z, columns have no vertical bound) all nearer than the near
+// plane, all at or beyond the far plane, or all left or right of the view (the same 4 x vs 5 z
+// tests as for a box, engine.h). A box's corners lie inside its chunk's, so its own bounds are
+// inside those. CULL_SLACK covers the rounding of the per-frame tables. Per frame, in 1/SUB units:
+// the window's first corner, then steps of a chunk along x and z, by addition
+#define CULL_SLACK   (SUB / 4)
+static uint8_t chunk_visible[WINDOW_N];
+static uint8_t chunks_done;          // visit_order entries projectScene went through (the bench checks them)
+
+static void cullChunks(void) {
+    const int24_t s = cam_sin, c = cam_cos;
+    // camera space of world point (8 (win_cx - 2), 8 (win_cz - 2)): rotate (point - player)
+    const int24_t px = (int24_t)((((int32_t)((win_cx - WINDOW_HALF) * CHUNK_SIZE) << 16) - player_x) >> 9);
+    const int24_t pz = (int24_t)((((int32_t)((win_cz - WINDOW_HALF) * CHUNK_SIZE) << 16) - player_z) >> 9);
+    int24_t row_x = (px * c - pz * s) / SUB;
+    int24_t row_z = (px * s + pz * c) / SUB;
+    // a chunk step along world x moves (8c, 8s) in camera space, along world z (-8s, 8c)
+    const int24_t ux = CHUNK_SIZE * c, uz = CHUNK_SIZE * s, vx = -CHUNK_SIZE * s, vz = CHUNK_SIZE * c;
+    // the corners of a chunk relative to its first: min and max over 0, u, v, u + v (+ slack)
+    const int24_t xmin = MIN(0, ux) + MIN(0, vx) - CULL_SLACK, xmax = MAX(0, ux) + MAX(0, vx) + CULL_SLACK;
+    const int24_t zmin = MIN(0, uz) + MIN(0, vz) - CULL_SLACK, zmax = MAX(0, uz) + MAX(0, vz) + CULL_SLACK;
+    uint8_t w = 0;
+    for (uint8_t j = 0; j < WINDOW; j++) {
+        int24_t x = row_x, z = row_z;
+        for (uint8_t i = 0; i < WINDOW; i++, w++) {
+            uint8_t vis = 1;
+            const int24_t x0 = x + xmin, x1 = x + xmax, z0 = z + zmin, z1 = z + zmax;
+            if (z1 < NEAR_PLANE) {
+                vis = 0;                    // behind the camera
+            } else if (z0 >= FAR_PLANE) {
+                vis = 0;
+            } else if (4 * x1 + 5 * z1 < 0) {
+                vis = 0;                    // left of the view
+            } else if (4 * x0 - 5 * z1 > 0) {
+                vis = 0;                    // right of the view
+            }
+            chunk_visible[w] = vis;
+            x += ux;
+            z += uz;
+        }
+        row_x += vx;
+        row_z += vz;
+    }
+}
+
+
+// Culls and projects every visible chunk into projected[], without drawing: chunks nearest first
+// (visit_order), the boxes of each near to far (sortChunk), so projected[] is near to far (see
+// Painter's order). A box with no face both towards the camera and not covered by a neighbour is
+// skipped before projecting. The per-box loop, the face test and the projection are in project.S.
+// main() calls this before waitForBufferScan(), so it runs in time that would otherwise be spent
+// waiting for the LCD
 static void projectScene(void) {
-    num_projected = projectRecords(coordinates, LEN(coordinates), projected);
+    PROF(const uint24_t tc = CYCLES();)
+    cullChunks();
+    PROF(prof_cull_cycles += CYCLES() - tc;)
+    projected_box_t *out = projected;
+    uint24_t room = MAX_PROJECTED;
+    uint8_t k = 0;
+    while (k < WINDOW_N) {
+        const uint8_t w = visit_order[k++];
+        chunk_t *ch = win[w];
+        if (ch->n == 0) {
+            continue;
+        }
+        if (!chunk_visible[w]) {
+            continue;
+        }
+        sortChunk(ch);
+        PROF(const uint24_t tp = CYCLES();)
+        const uint8_t kept = projectRecords(ch->rec, ch->n, out, room > 255 ? 255 : (uint8_t)room,
+                                            cam_bias_x + ch->ox, cam_bias_z + ch->oz);
+        PROF(prof_proj_cycles += CYCLES() - tp; prof_records += ch->n; prof_chunks++;)
+        out += kept;
+        room -= kept;
+        if (room == 0) {
+            break;
+        }
+    }
+    chunks_done = k;
+    num_projected = MAX_PROJECTED - room;
 }
 
 
@@ -773,10 +898,6 @@ static uint8_t my_font_data[] = {
     #include "../font/myfont.inc"
 };
 
-// Timer 2 counts CPU cycles (48 MHz) and is left free-running. Read the low 24 bits directly:
-// timer_Get() hangs with TIMER_CPU (see CLAUDE.md). Differences of two reads are correct across
-// the 24-bit wrap as long as the interval is under 2^24 cycles (349 ms)
-#define CYCLES() (*(volatile uint24_t *)TIMER_COUNT_ADDR(2))
 #define CYCLES_PER_TENTH_MS 4800
 
 
@@ -825,8 +946,6 @@ static void drawHud(uint8_t fps, uint24_t draw_cycles, uint24_t frame_cycles) {
 }
 
 #else
-
-#define CYCLES() 0
 
 static void initHud(void) {}
 
@@ -882,6 +1001,36 @@ void init_screen() {
 }
 
 
+// Opens the world file and checks it (header, checksum, contents). On an error it says so on the
+// home screen, waits for a key and returns 0
+static uint8_t openWorld(void) {
+    const uint8_t err = worldOpen(WORLD_APPVAR);
+    if (err == WORLD_OK) {
+        return 1;
+    }
+    os_ClrHome();
+    os_PutStrFull(worldError(err));
+    while (!os_GetCSC()) {
+    }
+    return 0;
+}
+
+uint24_t ground_colour3;   // fill.h
+
+// the player at the world's spawn: the middle of the spawn cell, on the ground. And the colour of
+// the ground plane
+static void spawnPlayer(void) {
+    uint8_t g = GROUND_COLOUR;
+    if (world->ground != WORLD_NO_GROUND) {
+        g = materials[world->ground][MAT_TOP];
+    }
+    ground_colour3 = g * (uint24_t)0x010101;
+    player_x = ((int32_t)world->spawn_x << 16) + (1L << 15);
+    player_z = ((int32_t)world->spawn_z << 16) + (1L << 15);
+    player_yaw = (uint24_t)world->spawn_yaw << 16;
+}
+
+
 int main(void)
 {
 
@@ -891,17 +1040,24 @@ int main(void)
         kb_Scan();
     }
 
+    // the world file first: on an error there is nothing to show
+    if (!openWorld()) {
+        return 0;
+    }
+    spawnPlayer();
+
     // initialization
     initHud();
     init_screen();
-    
-    // prep 3d environment
-    computeExposure();
+
+    // prep 3d environment. The chunks load after init_screen: computeExposure uses DBL_BUF2
     initFaceTables();
     initGridDist();
     initLodSlots();
+    initOccupancy();
+    initWindow();
     setupCamera();
-    sortScene();
+    followCamera();
 
     // FPS calculation
     uint8_t frame_count = 0;
@@ -942,10 +1098,8 @@ int main(void)
         handleInput(dt);
         setupCamera();
 
-        // painter's order: only changes when the camera enters another cell
-        if (sceneOrderStale()) {
-            sortScene();
-        }
+        // a new chunk: load the chunks that came into the window
+        followCamera();
 
         // Cull, project and rasterize before the wait: none of it touches a frame buffer (unless
         // the span list overflows, see fill.h), so it runs while the LCD still shows the last
@@ -978,8 +1132,10 @@ int main(void)
         frame_cycles = CYCLES() - frame_start - wait_cycles;
     }
 
-    // program end
+    // program end. The world's last played date last: archiving it may show the OS garbage
+    // collection screen
     kb_SetMode(kb_mode);
     gfx_End();
+    worldClose();
     return 0;
 }

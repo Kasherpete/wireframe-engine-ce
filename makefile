@@ -32,9 +32,18 @@ $(shell mkdir -p obj && (test "$$(cat obj/variant 2>/dev/null)" = "$(VARIANT)" |
 DEPS = obj/variant
 endif
 
+# "make" also builds the test world, bin/WORLD.8xv (utils/make_world.py), which the program loads
+.DEFAULT_GOAL := default
+
 # ----------------------------
 
 include $(shell cedev-config --makefile)
 
-.PHONY: hud
-hud: $(BUILD)
+.PHONY: default hud world
+default: $(BUILD) world
+hud: $(BUILD) world
+
+world: $(BINDIR)/WORLD.8xv
+$(BINDIR)/WORLD.8xv: utils/make_world.py
+	$(Q)mkdir -p $(BINDIR)
+	$(Q)python3 utils/make_world.py $@

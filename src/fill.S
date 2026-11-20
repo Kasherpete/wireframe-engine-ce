@@ -1,13 +1,13 @@
 ; fillScene / drawSpans: filled, shaded voxels with hidden surface removal.
 ;
-;   void fillScene(const projected_box_t *boxes, uint8_t n, uint24_t base)
+;   void fillScene(const projected_box_t *boxes, uint24_t n, uint24_t base)
 ;   void drawSpans(void)
 ;
 ; fill_ref.c is the same algorithm in C and draws the same frame, pixel for pixel: verify changes
 ; here against it (CLAUDE.md, "Verify asm changes against C").
 ;
 ; ---- How it works ----
-; Boxes are visited NEAR TO FAR (the painter order of main.c, backwards). Each viewport row keeps
+; Boxes are visited NEAR TO FAR (the painter order of main.c, boxes[] in order). Each viewport row keeps
 ; the list of its x intervals that nothing has covered yet. Every face of a box that faces the
 ; camera and is not covered by a neighbouring voxel (projectScene decides which) is a convex quad
 ; on screen; per row it covers [xl, xr). Only the parts of that inside open intervals are listed
@@ -168,6 +168,8 @@
 
 	.assume	ADL = 1
 
+	.extern	_ground_colour3
+
 ; ==================================================================================================
 	.section	.text._fillScene,"ax",@progbits
 	.global	_fillScene
@@ -214,31 +216,28 @@ _fillScene:
 	call	nz, .Laxis_table
 	pop	iy
 
-	; boxes front to back: from the end of the list
-	ld	a, (iy + 9)
-	or	a, a
-	jr	z, .Lboxes_done
-	ld	(.Lnbox), a
-	ld	h, a
-	ld	l, PB_SIZE
-	mlt	hl
-	ld	de, (iy + 6)
+	; boxes front to back: boxes[] is sorted near to far. .Lnbox counts the boxes left after
+	; this one, so the loop runs while decrementing it does not borrow
+	ld	hl, (iy + 9)
+	ld	de, -1
 	add	hl, de
+	jr	nc, .Lboxes_done	; n = 0
+	ld	(.Lnbox), hl
+	ld	hl, (iy + 6)
 	ld	(.Lboxp), hl
 .Lbox_loop:
-	ld	hl, (.Lboxp)
-	ld	de, -PB_SIZE
-	add	hl, de
+	ld	iy, (.Lboxp)
+	lea	hl, iy + PB_SIZE
 	ld	(.Lboxp), hl
-	push	hl
-	pop	iy
 	call	.Lbox
 	ld	a, (.Lopen)
 	or	a, a
 	jr	z, .Lboxes_done		; every row is closed: the rest is hidden
-	ld	hl, .Lnbox
-	dec	(hl)
-	jr	nz, .Lbox_loop
+	ld	hl, (.Lnbox)
+	ld	de, -1
+	add	hl, de
+	ld	(.Lnbox), hl
+	jr	c, .Lbox_loop
 .Lboxes_done:
 	pop	af
 	jp	po, 1f
@@ -1117,7 +1116,7 @@ _drawSpans:
 	jp	nz, 1b
 	.endm
 	BG_ROWS
-	ld	de, GROUND_COLOUR * 0x010101
+	ld	de, (_ground_colour3)	; the world ground plane (main.c)
 	ld	iyl, VIEW_H - CENTRE_Y
 	BG_ROWS
 
@@ -1277,7 +1276,7 @@ _lod_slot:	.zero	64		; MAT_* slot of a rectangle by FACE_* bits (main.c)
 .Lpush_sp:	.zero	3
 .Lbg_pending:	.zero	1		; drawSpans still has to fill the background
 .Lboxp:		.zero	3
-.Lnbox:		.zero	1
+.Lnbox:		.zero	3
 .Lopen:		.zero	1		; rows with an open interval
 
 	.extern	_materials
