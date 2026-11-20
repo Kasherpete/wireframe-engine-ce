@@ -8,8 +8,8 @@
 #define GAP_MAX         11          // open x intervals per row (more: see fill.S, "Overflow")
 #define GAP_BLOCK       32          // bytes of per-row state in fill.S
 
-// The span list lives in the spare VRAM frame DBL_BUF1 (main.c checks they agree): 6-byte records
-// pushed downwards from the end, 6399 of them. A face only starts when its worst case fits
+// The span list lives in the spare VRAM frame DBL_BUF1 (display.c checks they agree): 6-byte
+// records pushed downwards from the end, 6399 of them. A face only starts when its worst case fits
 // (GAP_MAX + 1 spans per row); otherwise the list is drawn early (see fillScene)
 #define SPAN_LIST       0xD52C00
 #define SPAN_LIST_END   0xD5C200
@@ -32,13 +32,18 @@ void fillScene(const projected_box_t *boxes, uint24_t n, uint24_t base);
 // Runs with interrupts disabled.
 void drawSpans(void);
 
+// After drawSpans: copies each drawn row to the LCD row below it (the 2 x 2 pixels), skipping the
+// rows nothing was drawn in (drawSpans filled both of their LCD rows). The first force rows are
+// copied anyway: for text drawn after drawSpans (the HUD)
+void deinterlaceFrame(uint8_t force);
+
 // The colour of a BOX_RECT box: lod_slot[faces] is the MAT_* entry of its material to use, by
-// the FACE_* bits projectScene kept (for a BOX_RECT, at most one side). main.c fills it at startup
+// the FACE_* bits projectScene kept (for a BOX_RECT, at most one side). sceneInit (scene.c) fills it
 extern uint8_t lod_slot[64];
 
-// main.c
+// display.c
 void waitForBufferScan(void);
-// the colour byte of the ground below the horizon, 3 times (the world's ground plane)
+// colours.c: the colour byte of the ground below the horizon, 3 times (the world's ground plane)
 extern uint24_t ground_colour3;
 
 #ifdef FILL_REFERENCE

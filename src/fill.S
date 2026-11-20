@@ -7,7 +7,7 @@
 ; here against it (CLAUDE.md, "Verify asm changes against C").
 ;
 ; ---- How it works ----
-; Boxes are visited NEAR TO FAR (the painter order of main.c, boxes[] in order). Each viewport row keeps
+; Boxes are visited NEAR TO FAR (the painter order of chunks.h, boxes[] in order). Each viewport row keeps
 ; the list of its x intervals that nothing has covered yet. Every face of a box that faces the
 ; camera and is not covered by a neighbouring voxel (projectScene decides which) is a convex quad
 ; on screen; per row it covers [xl, xr). Only the parts of that inside open intervals are listed
@@ -97,7 +97,7 @@
 #if VIEW_X1 - VIEW_X0 > 255 || VIEW_H > 255
 #error "x and y are bytes"
 #endif
-#if 4 + 2 * GAP_MAX + 2 > 29 || GAP_BLOCK != 32 || GAP_MAX < 2
+#if 4 + 2 * GAP_MAX + 2 > 29 || GAP_BLOCK != 32 || GAP_MAX < 2 || VIEW_X1 - VIEW_X0 != 160
 #error "per-row block layout"
 #endif
 #if SPAN_SIZE != 6
@@ -158,7 +158,7 @@
 #define L_RXL		179
 #define L_RXR		180
 #define L_OUTP		181		/* edge: block of its first row + slot */
-#define P_LOD		192		/* lod_slot[64], written by main.c */
+#define P_LOD		192		/* lod_slot[64], written by sceneInit (scene.c) */
 #define V(o)		ix + o - 128
 
 #define VIEW_W		VIEW_X1 - VIEW_X0	/* no parentheses: see CLAUDE.md. Mind the precedence */
@@ -187,19 +187,29 @@ _fillScene:
 	ld	de, VIEW_X0
 	add	hl, de
 	ld	(.Lfield), hl
+	; In two passes, 24 bytes of code per row instead of 33: the row addresses, then the state
+	; with 3-byte stores: bytes 0 .. 2 = n 1, xl, xr (anything); 3 .. 5 = no background, the
+	; interval [0, VIEW_W); 6 .. 8 = the sentinel and a byte past it
 	ld	ix, .Lrows
 	ld	de, 320
 	ld	b, VIEW_H
-1:	ld	(ix + B_N), 1
-	ld	(ix + B_BG), 0
-	ld	(ix + B_GAPS), 0
-	ld	(ix + B_GAPS + 1), VIEW_W
-	ld	(ix + B_GAPS + 2), 255	; the sentinel
-	ld	(ix + B_GAPS + 3), 255
-	ld	(ix + B_ROWBASE), hl
+1:	ld	(ix + B_ROWBASE), hl
 	add	hl, de
 	lea	ix, ix + GAP_BLOCK
 	djnz	1b
+	push	iy
+	ld	ix, .Lrows
+	ld	bc, 1
+	ld	de, 0xffffff
+	ld	iy, 65536 * VIEW_X1 - 65536 * VIEW_X0	; VIEW_W << 16 (VIEW_W has no parentheses)
+	ld	a, VIEW_H
+2:	ld	(ix + B_N), bc
+	ld	(ix + B_BG), iy
+	ld	(ix + B_GAPS + 2), de
+	lea	ix, ix + GAP_BLOCK
+	dec	a
+	jr	nz, 2b
+	pop	iy
 	ld	a, VIEW_H
 	ld	(.Lopen), a
 	ld	(.Lbg_pending), a	; non-zero: drawSpans fills the background
@@ -288,6 +298,19 @@ _fillScene:
 
 
 ; ==================================================================================================
+; a = hl clamped to 0 .. 255 (|hl| is far below 32768, so h tells which side): a column
+	.macro	CLAMP8
+	ld	a, h
+	or	a, a
+	ld	a, l
+	jr	z, 1f
+	ld	a, h
+	rla
+	sbc	a, a			; negative: ff
+	cpl				; negative: 0 (left of the viewport), else 255 (right of it)
+1:
+	.endm
+
 ; one box: iy -> projected_box_t. Clobbers every register
 .Lbox:
 	ld	ix, .Lpage + 128
@@ -373,18 +396,6 @@ _fillScene:
 	add	hl, de
 	ld	a, (hl)
 	call	.Lcolour
-	; columns, clamped to 0 .. 255 (|x| is far below 32768, so h tells which side)
-	.macro	CLAMP8
-	ld	a, h
-	or	a, a
-	ld	a, l
-	jr	z, 1f
-	ld	a, h
-	rla
-	sbc	a, a			; negative: ff
-	cpl				; negative: 0 (left of the viewport), else 255 (right of it)
-1:
-	.endm
 	ld	hl, (iy + PB_V)
 	CLAMP8
 	ld	(V(L_RXL)), a
@@ -452,8 +463,60 @@ _fillScene:
 	ld	(V(L_YMIN)), de
 	ld	(V(L_YMAX)), bc
 
-; ---- 2. rows [max(ymin, 0), min(ymax, VIEW_H)), trimmed to open ones (faces and rectangles) ----
+	; ---- the x extent of the face, [xmin, xmax] of its vertices clamped to 0 .. 255, into
+	; L_RXL and L_RXR (used by rectangles only otherwise). Every span of the face lies in it: an
+	; edge never steps past its end vertex, and xr <= the largest x ----
+	ld	hl, .Lpage
+	ld	l, (iy + 0)
+	ld	de, (hl)
+	push	de
+	pop	bc
+	.macro	XMINMAX i
+	ld	hl, .Lpage
+	ld	l, (iy + 2 * \i)	; the x of vertex i
+	ld	hl, (hl)
+	or	a, a
+	sbc	hl, de			; x - xmin
+	jp	p, 1f
+	add	hl, de
+	ex	de, hl			; a new least
+	jr	2f
+1:	add	hl, de
+	or	a, a
+	sbc	hl, bc			; x - xmax
+	jp	m, 2f
+	add	hl, bc
+	push	hl
+	pop	bc			; a new greatest
+2:
+	.endm
+	XMINMAX	1
+	XMINMAX	2
+	XMINMAX	3
+	ex	de, hl
+	CLAMP8
+	ld	(V(L_RXL)), a
+	push	bc
+	pop	hl
+	CLAMP8
+	ld	(V(L_RXR)), a
+	sub	a, (V(L_RXL))
+	ret	z			; no column (and x only ever rounds inside the extent)
+	ret	c
+
+; ---- 2. rows [max(ymin, 0), min(ymax, VIEW_H)), trimmed to rows where something can show
+; (faces and rectangles) ----
 .Lrows_setup:
+	call	.Lrows_find
+	ret	nc			; nothing of it can show
+	jp	.Lrows_found
+
+; The first row of [max(L_YMIN, 0), min(L_YMAX, VIEW_H)) with an open interval overlapping
+; [L_RXL, L_RXR): the others cannot get a pixel of this face, rectangle or box. Found: carry, a =
+; the row, hl = its block, b = the rows from it to the end of the range. None: no carry. Only the
+; parts of the range with something to show then get their edges computed: about a third of the
+; faces in the test world, and most in a dense one, are entirely hidden by nearer boxes
+.Lrows_find:
 	ld	hl, (V(L_YMIN))
 	ld	de, 0
 	or	a, a
@@ -471,8 +534,8 @@ _fillScene:
 2:	ld	de, (V(L_Y0))
 	or	a, a
 	sbc	hl, de			; rows
-	ret	m
-	ret	z
+	jp	m, .Lfind_none
+	jr	z, .Lfind_none
 	ld	b, l			; at most VIEW_H: bytes from here on
 	ld	a, e			; first row
 	ld	h, a
@@ -481,14 +544,43 @@ _fillScene:
 	ld	de, .Lrows
 	add	hl, de
 	ld	de, GAP_BLOCK
-1:	inc	(hl)
-	dec	(hl)
-	jr	nz, 2f
+
+	; carry: an open interval of the row at hl overlaps [L_RXL, L_RXR). The intervals are sorted
+	; and end with the sentinel [255, 255]: the first one with g1 > xl decides, overlapping when
+	; its g0 < xr (never the sentinel: xr <= 255). a kept, c clobbered
+	.macro	ROW_SEES
+	ld	c, a
+	ld	a, (hl)			; n
+	or	a, a			; (no carry)
+	jr	z, 9f			; closed
+	push	hl
+	ld	a, l
+	add	a, B_GAPS		; blocks are 32-aligned: no carry into h
+	ld	l, a			; g0 of the first interval
+	ld	a, (V(L_RXL))
+8:	inc	hl
+	cp	a, (hl)			; xl - g1
+	inc	hl
+	jr	nc, 8b			; g1 <= xl: the next one
+	dec	hl
+	dec	hl
+	ld	a, (hl)			; its g0
+	pop	hl
+	cp	a, (V(L_RXR))		; g0 - xr: borrow if they overlap
+9:	ld	a, c
+	.endm
+
+1:	ROW_SEES
+	ret	c
 	add	hl, de
 	inc	a
 	djnz	1b
-	ret				; every row is closed
-2:	ld	(V(L_R0)), a
+.Lfind_none:
+	or	a, a
+	ret
+
+.Lrows_found:
+	ld	(V(L_R0)), a
 	ld	(V(L_BLK0)), hl
 	ld	c, b
 	dec	c
@@ -497,11 +589,10 @@ _fillScene:
 	mlt	de
 	add	hl, de			; block of the last row
 	ld	de, -GAP_BLOCK
-3:	inc	(hl)
-	dec	(hl)
-	jr	nz, 4f
+3:	ROW_SEES
+	jr	c, 4f
 	add	hl, de
-	djnz	3b			; ends at the latest at the first row, which is open
+	djnz	3b			; ends at the latest at the first row, which shows
 4:	ld	(V(L_NROW)), b
 
 	; room in the span list for the worst case
@@ -1093,11 +1184,31 @@ _drawSpans:
 	ld	ix, .Lrows
 	ld	de, SKY_COLOUR * 0x010101
 	ld	iyl, CENTRE_Y
+	; A row nothing was drawn in (one open interval, [0, VIEW_W)) gets both of its LCD rows here,
+	; 320 bytes by push (about 3.3 cycles per byte), and deinterlaceFrame skips it (ldir would cost
+	; about 7.7 per byte). Other open rows get the background in their drawn LCD row only
 	.macro	BG_ROWS
 1:	ld	a, (ix + B_N)
 	or	a, (ix + B_BG)
-	jr	z, 2f			; spans cover the whole row
-	.rept	BG_REM
+	jp	z, 2f			; spans cover the whole row
+	dec	a			; (B_BG is only ever set with several intervals)
+	jp	nz, 4f
+	ld	a, (ix + B_GAPS + 1)
+	sub	a, VIEW_W
+	or	a, (ix + B_GAPS)
+	jp	nz, 4f
+	.rept	2			; untouched: 320 = 2 + 3 * 106 bytes
+	ld	(hl), e
+	inc	hl
+	.endr
+	ld	bc, 318
+	add	hl, bc
+	ld	sp, hl
+	.rept	106
+	push	de
+	.endr
+	jr	5f			; hl: the next row
+4:	.rept	BG_REM
 	ld	(hl), e
 	inc	hl
 	.endr
@@ -1111,12 +1222,12 @@ _drawSpans:
 	jr	3f
 2:	ld	bc, 320
 3:	add	hl, bc
-	lea	ix, ix + GAP_BLOCK
+5:	lea	ix, ix + GAP_BLOCK
 	dec	iyl
 	jp	nz, 1b
 	.endm
 	BG_ROWS
-	ld	de, (_ground_colour3)	; the world ground plane (main.c)
+	ld	de, (_ground_colour3)	; the world ground plane (colours.c)
 	ld	iyl, VIEW_H - CENTRE_Y
 	BG_ROWS
 
@@ -1202,6 +1313,49 @@ _drawSpans:
 
 
 ; ==================================================================================================
+;   void deinterlaceFrame(uint8_t force)
+; After drawSpans: copies each viewport row of the frame fillScene drew to the LCD row below it
+; (the 2 x 2 pixels, see CLAUDE.md), except the rows nothing was drawn in: drawSpans already filled
+; both of their LCD rows with the background. The first force rows are copied anyway (the HUD
+; draws text into them after drawSpans). About 1.3k cycles per row copied, 0.1k per row skipped
+	.section	.text._deinterlaceFrame,"ax",@progbits
+	.global	_deinterlaceFrame
+	.type	_deinterlaceFrame,@function
+_deinterlaceFrame:
+	ld	iy, 0
+	add	iy, sp
+	ld	a, (iy + 3)
+	push	ix
+	ld	ix, .Lrows
+	ld	iyl, VIEW_H
+	ld	iyh, a			; rows still to copy regardless
+1:	ld	a, iyh
+	or	a, a
+	jr	z, 2f
+	dec	iyh
+	jr	3f
+2:	ld	a, (ix + B_N)
+	dec	a
+	jr	nz, 3f
+	ld	a, (ix + B_GAPS + 1)
+	sub	a, VIEW_W
+	or	a, (ix + B_GAPS)
+	jr	z, 4f			; untouched: done by drawSpans
+3:	ld	hl, (ix + B_ROWBASE)
+	ld	de, 160			; the LCD row below
+	ex	de, hl
+	add	hl, de
+	ex	de, hl
+	ld	bc, VIEW_W
+	ldir
+4:	lea	ix, ix + GAP_BLOCK
+	dec	iyl
+	jr	nz, 1b
+	pop	ix
+	ret
+
+
+; ==================================================================================================
 	.section	.rodata._fillScene,"a",@progbits
 ; per face in FACE_* bit order (+x -x +z -z top bottom): its 4 vertices in clockwise screen order
 ; (v = corner k at the top, k + 4 at the bottom), twice over
@@ -1264,7 +1418,7 @@ _drawSpans:
 	.balign	256
 .Lpage:		.zero	P_LOD		; the box, colours, the face, locals (P_* and L_*)
 	.global	_lod_slot
-_lod_slot:	.zero	64		; MAT_* slot of a rectangle by FACE_* bits (main.c)
+_lod_slot:	.zero	64		; MAT_* slot of a rectangle by FACE_* bits (scene.c)
 	.balign	GAP_BLOCK
 .Lrows:		.zero	GAP_BLOCK * VIEW_H
 	.balign	16

@@ -1,5 +1,5 @@
-// Benchmark and verification harness (utils/bench/run_bench.sh). Included at the end of a scratch
-// copy of main.c, whose own main() is renamed, so it sees every static function and variable.
+// Benchmark and verification harness (utils/bench/run_bench.sh). Replaces src/main.c in a scratch
+// copy of the sources, and is built with SHOW_HUD for the cycle counters.
 //
 // Renders BENCH_VIEWS camera views from a fixed seed (positions in the BENCH_XMIN .. BENCH_ZMAX
 // box of cells, 0.5 .. 2.5 units up, a quarter of them exactly N/E/S/W) and shows the total
@@ -9,6 +9,7 @@
 //   sort bad   the visible chunks are in order (keys near to far) and hold the same records
 //   expo bad   after each window update, computeExposure of the inner 3 x 3 chunks against the
 //              faces stored in the world file
+//   deint bad  views where an LCD row pair differs after deinterlaceFrame
 // The second column breaks projectScene down (cull, sorts, projectRecords) and adds the costs of
 // a frame outside the scene: setupCamera and the de-interlace copy.
 //   bad px     with -DFILL_REFERENCE each view is also drawn by fill_ref.c into BUFFER_2 and
@@ -18,6 +19,19 @@
 // 1.5, looking along +x, a quarter cell per view (as walking at 60 FPS crosses about 1/15 cell
 // per frame, the loads and sorts per view are about 4 times a frame's), so "max load k" and the
 // per-view maxima show the hitch of a chunk crossing.
+#include <keypadc.h>
+#include <fontlibc.h>
+
+#include "camera.h"
+#include "chunks.h"
+#include "colours.h"
+#include "display.h"
+#include "fill.h"
+#include "hud.h"
+#include "player.h"
+#include "scene.h"
+#include "world.h"
+
 #ifndef BENCH_VIEWS
 #define BENCH_VIEWS 40
 #endif
@@ -28,7 +42,20 @@
 #define BENCH_ZMAX 44
 #endif
 
-static uint24_t sort_bad = 0, expo_bad = 0;
+static uint24_t sort_bad = 0, expo_bad = 0, deint_bad = 0;
+
+// after deinterlaceFrame: every LCD row pair of the frame at buf holds the same bytes
+static void checkDeinterlace(uint24_t buf) {
+    for (uint8_t r = 0; r < VIEW_H; r++) {
+        const uint8_t *row = (const uint8_t *)buf + (uint24_t)r * 320;
+        for (uint8_t x = 0; x < 160; x++) {
+            if (row[x] != row[x + 160]) {
+                deint_bad++;
+                return;
+            }
+        }
+    }
+}
 
 // order-independent sum of the window's records
 static uint24_t windowXor(void) {
@@ -79,8 +106,10 @@ static void checkExposure(void) {
     }
 }
 
+#ifndef BENCH_WALK
 static uint32_t rng = 12345;
 static uint24_t rnd24(void) { rng = rng * 1103515245u + 12345u; return (uint24_t)(rng >> 8); }
+#endif
 
 static void line(uint8_t x, uint8_t y, const char *s, uint24_t v) {
     fontlib_SetCursorPosition(x, y);
@@ -93,17 +122,16 @@ int main(void) {
     lod_rect_dist = BENCH_LOD_RECT;
     lod_pixel_dist = BENCH_LOD_PIX;
 #endif
-    if (!openWorld()) return 0;
-    spawnPlayer();
-    initHud();
-    init_screen();
-    initFaceTables();
-    initGridDist();
-    initLodSlots();
-    initOccupancy();
-    initWindow();
+    if (!worldStart()) return 0;
+    coloursInit();
+    playerSpawn();
+    hudInit();
+    displayInit();
+    cameraInit();
+    sceneInit();
+    windowInit();
     setupCamera();
-    followCamera();
+    windowFollow();
 
     uint32_t t_load = 0, t_proj = 0, t_fill = 0, t_draw = 0, t_max = 0, nboxes = 0, t_setup = 0, t_deint = 0;
     uint24_t max_boxes = 0, full = 0, max_load = 0;
@@ -137,7 +165,7 @@ int main(void) {
         t_setup += CYCLES() - ts;
         const uint24_t loads = prof_loads;
         uint24_t t0 = CYCLES();
-        followCamera();
+        windowFollow();
         t0 = CYCLES() - t0;
         t_load += t0;
         if (t0 > max_load) max_load = t0;
@@ -153,8 +181,9 @@ int main(void) {
         uint24_t t2 = CYCLES();
         drawSpans();
         uint24_t t3 = CYCLES();
-        deInterlaceViewportBuffer(BUFFER_1);
+        deinterlaceFrame(0);
         t_deint += CYCLES() - t3;
+        checkDeinterlace(BUFFER_1);
         t_proj += t1 - t0;
         t_fill += t2 - t1;
         t_draw += t3 - t2;
@@ -209,6 +238,7 @@ int main(void) {
     line(84, 83, "rec/v ", prof_records / BENCH_VIEWS);
     line(84, 91, "setup k ", (uint24_t)(t_setup / 1000));
     line(84, 99, "deint k ", (uint24_t)(t_deint / 1000));
+    line(84, 83 + 8 * 3, "deint bad ", deint_bad);
     deInterlaceFullBuffer(BUFFER_1);
     while (!(kb_Data[6] & kb_Clear)) {
         kb_Scan();

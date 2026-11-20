@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Builds a world AppVar (.8xv) for the engine: the file format that src/world.h describes.
 
-Usage: python3 utils/make_world.py [out.8xv] [--preset test|dense] [--name NAME]
+Usage: python3 utils/make_world.py [out.8xv] [--preset test|dense|random] [--name NAME]
                                    [--appvar WORLD] [--ram] [--bin out.bin]
 
   --preset   test   (default) a 6 x 6 chunk world with features across chunk borders
              dense  every chunk near the 255 voxel limit (benchmarks, worst case)
+             random random boxes of random size, colour and height scattered over the ground plane
   --appvar   the AppVar name on the calculator (the engine opens WORLD_APPVAR, "WORLD")
   --ram      send it to RAM instead of the archive
   --bin      also write the raw AppVar contents
@@ -248,17 +249,35 @@ def preset_dense():
     return w
 
 
+def preset_random():
+    """6 x 6 chunks on a ground plane with about 120 random boxes (1-3 cells wide and deep, 1-5
+    high, random material), spawn in the middle with a clear patch around it. Fixed seed"""
+    import random
+    rng = random.Random(84)
+    w = World(6, 6, "Random Boxes", ground=3)
+    n = 6 * CHUNK
+    for _ in range(120):
+        x, z = rng.randrange(n), rng.randrange(n)
+        if abs(x - 24) < 3 and abs(z - 24) < 3:
+            continue
+        dx, dz, h = rng.randint(0, 2), rng.randint(0, 2), rng.randint(1, 5)
+        mat = rng.choice([m for m in range(1, 16) if m != 3])
+        w.box(x, x + dx, -h, -1, z, z + dz, mat)
+    w.spawn = (24, 24, 0)
+    return w
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("out", nargs="?", default="bin/WORLD.8xv")
-    ap.add_argument("--preset", default="test", choices=("test", "dense"))
+    ap.add_argument("--preset", default="test", choices=("test", "dense", "random"))
     ap.add_argument("--name")
     ap.add_argument("--appvar", default="WORLD")
     ap.add_argument("--ram", action="store_true")
     ap.add_argument("--bin")
     a = ap.parse_args()
 
-    w = {"test": preset_test, "dense": preset_dense}[a.preset]()
+    w = {"test": preset_test, "dense": preset_dense, "random": preset_random}[a.preset]()
     if a.name:
         w.name = a.name
     data, chunks = w.pack()

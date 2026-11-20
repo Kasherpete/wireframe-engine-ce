@@ -1,11 +1,11 @@
-; sortRecords: the painter sort of one chunk (main.c, sortChunk).
+; sortRecords: the painter sort of one chunk (chunks.c, sortChunk).
 ;
 ;   void sortRecords(int8_t (*rec)[5], int8_t (*scratch)[5], uint8_t *keys, uint8_t n,
 ;                    uint8_t bx, uint8_t by, uint8_t bz)
 ;
 ; Sorts the n records {X, Y, Z, material, exposed faces} NEAR TO FAR by their Manhattan distance in
 ; cells from the camera, gridDist[X + bx] + gridDist[Y + by] + gridDist[Z + bz] with 8-bit adds
-; (main.c explains why the low byte of the grid index is exact). A stable counting sort in three
+; (chunks.c explains why the low byte of the grid index is exact). A stable counting sort in three
 ; passes over rec, then scratch is copied back over rec. keys must hold n bytes. n must be 1 .. 255.
 ;
 ; Measured per sort: 74k cycles for a 153-record scene (the earlier version with 3-byte start
@@ -30,7 +30,7 @@
 #include "engine.h"
 
 #define REC_SIZE	5				/* bytes per scene record */
-/* Keys are bytes: main.c asserts that no key of a loaded chunk exceeds 255 */
+/* Keys are bytes: chunks.h asserts that no key of a loaded chunk exceeds 255 */
 
 ; argument offsets from sp after push ix
 #define A_REC		6
@@ -176,7 +176,7 @@ _sortRecords:
 	.section	.bss._sortRecords,"aw",@nobits
 	.balign	256
 	.global	_gridDist
-_gridDist:	.zero	256		; filled by initGridDist() in main.c
+_gridDist:	.zero	256		; filled by initGridDist() in chunks.c
 .Lcount:	.zero	256		; records per key. Zero between sorts
 .Lstart:	.zero	256		; next free record index in scratch per key
 

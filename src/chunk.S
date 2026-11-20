@@ -1,4 +1,4 @@
-; The per-voxel loops of chunk loading and exposure (main.c: loadChunk, computeExposure).
+; The per-voxel loops of chunk loading and exposure (chunks.c: loadChunk, computeExposure).
 ;
 ;   void copyVoxels(int8_t (*rec)[5], const world_voxel_t *v, uint8_t n, int8_t *yrange)
 ;   void occMark(const int8_t (*rec)[5], uint8_t n, uint8_t ybase)
@@ -10,7 +10,7 @@
 ; z, material, faces}, and stores the least and greatest Y in yrange[0] and [1] (127 and -128 for
 ; n = 0).
 ;
-; The occupancy grid (main.c, OCC) holds one byte per cell of a chunk and a border of one around
+; The occupancy grid (chunks.c, OCC) holds one byte per cell of a chunk and a border of one around
 ; it, 0 or 1: OCC_ROW bytes per row of x, OCC_LAYER per layer of z rows. occ_layer[L] is the
 ; address of cell (0, L, 0), so cell (x, L, z) is occ_layer[L] + OCC_ROW z + x, and its six
 ; neighbours are at +-1, +-OCC_ROW and +-OCC_LAYER: all (ix + d) displacements. A record is in

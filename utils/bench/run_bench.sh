@@ -14,10 +14,7 @@ OUT="$(realpath -m "${1:-/tmp/wireframe_bench}")"
 shift || true
 rm -rf "$OUT"; mkdir -p "$OUT"
 cp -r "$ROOT/src" "$ROOT/font" "$ROOT/makefile" "$OUT/"
-cp "$ROOT/utils/bench/bench.c" "$OUT/src/bench.inc"
-sed -i 's/^int main(void)$/int real_main(void)/' "$OUT/src/main.c"
-grep -q real_main "$OUT/src/main.c"
-printf '\n#include "bench.inc"\n' >> "$OUT/src/main.c"
+cp "$ROOT/utils/bench/bench.c" "$OUT/src/main.c"
 python3 "$ROOT/utils/make_world.py" "$OUT/WORLD.8xv" --preset "${WORLD:-test}"
 echo "CFLAGS += -DSHOW_HUD=1 -Wno-shift-negative-value $*" >> "$OUT/makefile"
 (cd "$OUT" && make -j4 build 2>&1 | grep -iE "warning|error" || true)

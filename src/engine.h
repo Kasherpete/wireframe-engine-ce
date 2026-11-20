@@ -1,5 +1,6 @@
-// Shared between main.c, project.S and fill.S. Defines only outside the __ASSEMBLER__ guard, and no
-// value may start with "(": the assembler would read that as a memory operand.
+// Shared between the C files and the assembly (project.S, fill.S, chunk.S, sort.S, camera.S).
+// Defines only outside the __ASSEMBLER__ guard, and no value may start with "(": the assembler
+// would read that as a memory operand.
 #ifndef ENGINE_H
 #define ENGINE_H
 
@@ -37,7 +38,7 @@
 // ---- filled rendering (fill.S) ----
 // Faces of a box (corner k as in the GEN layout above). projectScene keeps those that face the
 // camera, from the sign of (box cell - camera cell) on each axis, and that no neighbouring voxel
-// covers (computeExposure in main.c)
+// covers (computeExposure in chunks.c)
 #define FACE_XP      0x01  // +x face, corners 1 and 3: camera cell x > box cell x
 #define FACE_XN      0x02  // -x face, corners 0 and 2: camera cell x < box cell x
 #define FACE_ZP      0x04  // +z face, corners 2 and 3
@@ -53,7 +54,7 @@
 #define PB_V         3
 #define PB_SIZE      39    // PB_V + 3 BOX_OUT_LEN
 
-// the occupancy grid of computeExposure (main.c, expose.S): a chunk (8 x 8 cells) and a border
+// the occupancy grid of computeExposure (chunks.c, chunk.S): a chunk (8 x 8 cells) and a border
 #define OCC_ROW      10    // bytes per row of x
 #define OCC_LAYER    100   // bytes per layer (y): under 128, so expose.S reads neighbours as (ix + d)
 
@@ -69,7 +70,7 @@
 #define SKY_COLOUR     0xcc
 #define GROUND_COLOUR  0x55
 
-// ---- level of detail (the defaults of lod_rect_dist and lod_pixel_dist in main.c) ----
+// ---- level of detail (the defaults of lod_rect_dist and lod_pixel_dist, camera.c) ----
 // A box whose nearest corner is at least LOD_RECT_DIST world units deep is drawn as one rectangle
 // (its projected extent, in the colour of the side it shows most), and from LOD_PIXEL_DIST on as a
 // single pixel: 2 projections and one 1-pixel span instead of 12 projections and up to 3 faces.
@@ -83,12 +84,12 @@
 
 #define GRID_LEN     (2 * GRID_RANGE + 1)
 
-// ---- per-frame camera state: written by setupCamera() in main.c, read by project.S ----
-// The tables and biases are defined in main.c. The scalars from cam_cos3 on are defined in
+// ---- per-frame camera state: written by setupCamera() in camera.c, read by project.S ----
+// The tables and biases are defined in camera.c. The scalars from cam_cos3 on are defined in
 // project.S, next to its locals, so it can address them all through IX.
 // n = cell + cam_bias_x + 1 is the table index of the grid line at the low side of world cell x
 // (likewise y and z), so n - GRID_RANGE is that cell minus the camera's. A record's x is chunk
-// local: projectRecords adds the chunk's origin to cam_bias_x (main.c, chunk_t)
+// local: projectRecords adds the chunk's origin to cam_bias_x (chunks.h, chunk_t)
 extern int24_t cam_bias_x, cam_bias_y, cam_bias_z;
 // rotX_[2n] = XC, rotX_[2n+1] = XS and rotZ_[2n] = ZS, rotZ_[2n+1] = ZC, where XC/XS is
 // (x - player x) * cos/sin for grid line x (and the same for z). camY_[n] = y - player y.
@@ -128,7 +129,7 @@ extern uint8_t face_x[256], face_y[256], face_z[256];  // FACE_* towards the cam
 uint8_t projectRecords(const int8_t (*rec)[5], uint8_t n, projected_box_t *out, uint8_t room,
                        int24_t bias_x, int24_t bias_z);
 
-// {top, x side, z side, bottom} colour bytes per material (main.c)
+// {top, x side, z side, bottom} colour bytes per material (colours.c)
 extern const uint8_t materials[MAT_COUNT][4];
 // AXIS layout -> GEN corners: the world corner k (0..3) of the near-left, near-right, far-left and
 // far-right vertical edge while facing N/E/S/W. Written by setupCamera()

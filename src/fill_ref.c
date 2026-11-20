@@ -17,8 +17,8 @@ typedef struct {
     uint8_t len;
     uint8_t colour;
 } span_t;
-// The span list and the intervals live in DBL_BUF2 above main.c's exposure grid (the bench uses
-// one at a time): bss has no room for them next to the chunks
+// The span list and the intervals live in DBL_BUF2 above the exposure grid of chunks.c (the
+// bench uses one at a time): bss has no room for them next to the chunks
 #define SPAN_LIST_REF 0xD60E00
 #define GAP_X0_REF    (SPAN_LIST_REF + SPAN_MAX * 5)
 #define GAP_X1_REF    (GAP_X0_REF + VIEW_H * GAP_MAX)

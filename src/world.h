@@ -3,7 +3,7 @@
 //
 // The world is split into chunk columns of CHUNK_SIZE x CHUNK_SIZE cells (x and z), of any height,
 // with at most CHUNK_MAX voxels each. The engine keeps the 5 x 5 chunks around the camera in RAM
-// (main.c) and reads the rest from the file as the camera moves. An archived AppVar is read in
+// (chunks.c) and reads the rest from the file as the camera moves. An archived AppVar is read in
 // place, straight from flash.
 //
 // The ground plane: a world may say that everything at y >= 0 is solid ground of one material.
@@ -71,6 +71,9 @@ extern const world_header_t *world;
 uint8_t worldOpen(const char *appvar);
 // a short message for a worldOpen() error
 const char *worldError(uint8_t err);
+// Opens WORLD_APPVAR before graphx starts. On an error it says so on the home screen, waits for a
+// key and returns 0
+uint8_t worldStart(void);
 // the voxels of chunk (cx, cz) and their number in *count. NULL and 0 outside the world
 const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count);
 // Stores the current date and time as last played, updates the checksum and closes the world.

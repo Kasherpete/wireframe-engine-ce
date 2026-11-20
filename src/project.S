@@ -7,12 +7,12 @@
 ; camera (face_x/y/z, by grid index) that are also exposed; none, and the box is skipped. Otherwise
 ; the voxel is culled in camera space, its corners projected and the result classified (BOX_*,
 ; engine.h). Kept boxes go to out[] in record order, with their faces and material, until room of
-; them are kept. Returns how many. Reads the per-frame camera state that setupCamera() in main.c
+; them are kept. Returns how many. Reads the per-frame camera state that setupCamera() in camera.c
 ; writes (layout in engine.h).
 ;
 ; X and Z are chunk local: the grid index of a record is X + bias_x (Z + bias_z, and Y + cam_bias_y),
-; where main.c passes bias_x = cam_bias_x + the x of the first cell of the chunk + 1. The voxel
-; spans the cell whose grid index that is (engine.h).
+; where projectScene (scene.c) passes bias_x = cam_bias_x + the x of the first cell of the
+; chunk + 1. The voxel spans the cell whose grid index that is (engine.h).
 ;
 ; Level of detail: a box whose nearest corner is at least cam_lod_rect deep becomes BOX_RECT, the
 ; rectangle of its x and y extent projected at its centre depth (4 projections instead of 12).
@@ -354,7 +354,7 @@ _projectRecords:
 	sbc	hl, de			; yt + z00 - cyl
 	jp	m, .Lskip
 
-	; ---- the faces towards the camera, by the low byte of the grid index (see main.c), that
+	; ---- the faces towards the camera, by the low byte of the grid index (camera.c), that
 	; are also exposed. None: nothing of this box can show ----
 	ld	hl, _face_x
 	ld	a, (iy + 0)
@@ -561,7 +561,7 @@ _projectRecords:
 
 	; ==== level of detail colour: of the visible x and z sides, keep only the one that points
 	; at the camera position most (the axis with the larger distance in cells, z on a tie), so
-	; the colour depends on where the camera is, not where it looks. lod_slot (main.c) then
+	; the colour depends on where the camera is, not where it looks. lod_slot (scene.c) then
 	; picks that side. gridDist is exact for a kept box (its grid index is in 0 .. 2 GRID_RANGE)
 .Llod_side:
 	ld	hl, (VAR(V_REC))
@@ -641,7 +641,7 @@ _projectRecords:
 
 	.section	.bss._projectRecords,"aw",@nobits
 ; Everything here is addressed through ix (VAR), so the block must stay under 128 bytes.
-; The _cam_ values are written by setupCamera() in main.c (declared in engine.h).
+; The _cam_ values are written by setupCamera() in camera.c (declared in engine.h).
 .Lvars:
 .Lyt:	.zero	3			; camera y of the box top (x3)
 .Lx00:	.zero	3			; camera space of corner (X-1, Z-1) (x3)
@@ -777,7 +777,7 @@ _cam_lod_pix:	.zero	3
 	.error	"V_ROOM does not match .Lvars"
 	.endif
 
-; Faces of a box towards the camera by the grid index of each axis (main.c, initFaceTables):
+; Faces of a box towards the camera by the grid index of each axis (camera.c, cameraInit):
 ; three consecutive pages, so inc h steps from one to the next
 	.balign	1024
 	.global	_face_x, _face_y, _face_z

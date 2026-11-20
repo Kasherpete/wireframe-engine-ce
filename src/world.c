@@ -3,6 +3,8 @@
 #include <string.h>
 #include <fileioc.h>
 #include <sys/rtc.h>
+#include <ti/screen.h>
+#include <ti/getcsc.h>
 
 #include "engine.h"
 #include "world.h"
@@ -133,6 +135,18 @@ const char *worldError(uint8_t err) {
         case WORLD_BAD_DATA:   return "World has bad data";
         default:               return "World OK";
     }
+}
+
+uint8_t worldStart(void) {
+    const uint8_t err = worldOpen(WORLD_APPVAR);
+    if (err == WORLD_OK) {
+        return 1;
+    }
+    os_ClrHome();
+    os_PutStrFull(worldError(err));
+    while (!os_GetCSC()) {
+    }
+    return 0;
 }
 
 const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count) {

@@ -6,9 +6,11 @@
 ; bytes 160..160+width-1, the LCD row below in 4bpp mode (see CLAUDE.md). width must be 1..160:
 ; ldir with bc = 0 would copy 16 MB. row0 plus 119 rows plus 160 + width must stay inside the frame.
 ;
-; Why assembly: the C loop recomputed the row address from gfx_vbuffer and called memcpy per row.
-; ldir is the cheapest copy on the CE (about 7.7 cycles per byte in CEmu), so this is within a few
-; percent of the floor: 119k cycles for the 128 byte viewport, against 139k for the C loop.
+; Used at startup (displayInit) and for any full-frame copy. Each frame, deinterlaceFrame in fill.S
+; does the same per row but skips the rows drawSpans already filled on both LCD rows.
+;
+; ldir is the cheapest copy on the CE (about 7.7 cycles per byte in CEmu): about 149k cycles for
+; the whole 160 byte width.
 ;
 ; ABI: arguments at sp+3, sp+6; IX preserved; AF BC DE HL IY clobbered.
 ; No apostrophes in comments: this file goes through the C preprocessor.
