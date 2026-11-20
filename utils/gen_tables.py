@@ -26,7 +26,7 @@ VIEW_HALF_WIDTH = 80    # logical px from the screen centre to the viewport edge
 # Horizontal culling keeps |x| <= (CULL_X_NUM / CULL_X_DEN) z, which must be exactly the view:
 # VIEW_HALF_WIDTH / FOCAL_LENGTH (80 / 64 = 1.25, a 102 deg FOV). project.S hard-codes 4 x vs 5 z.
 CULL_X_NUM, CULL_X_DEN = 5, 4
-RENDER_DIST = 24        # far plane, in world units
+RENDER_DIST = 40        # far plane, in world units (GRID_RANGE: at most 85, see sort.S)
 NEAR_PLANE = SUBUNITS // 2  # boxes with a corner nearer than this are culled (1/SUBUNITS units)
 LOG_STEPS = 256         # log table resolution: steps per doubling (0.27% per step)
 SIN_STEPS = 256         # yaw angles per full turn
@@ -71,6 +71,9 @@ def main():
 
     # per corner at depth z, zmax <= z + spread. That bound can pass the end of the log table
     # near the far plane, where zmax < FAR_PLANE caps |a| instead, hence the min()
+    # The level of detail (BOX_RECT in project.S) projects corner values, or values between two
+    # corners, at the box's centre depth zc instead. zc lies between the nearest and the farthest
+    # corner, so zc >= NEAR_PLANE and zmax <= zc + spread: the same bound, with z = zc, covers it
     d_min = min(log_table[0], 0) - log_table[FAR_PLANE - 1]
     d_max = max(log_table[min(bound(z + spread), log_table_len - 1)] - log_table[z]
                 for z in range(NEAR_PLANE, FAR_PLANE)

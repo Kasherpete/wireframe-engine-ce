@@ -1,4 +1,4 @@
-// Shared between main.c and project.S. Defines only outside the __ASSEMBLER__ guard, and no
+// Shared between main.c, project.S and fill.S. Defines only outside the __ASSEMBLER__ guard, and no
 // value may start with "(": the assembler would read that as a memory operand.
 #ifndef ENGINE_H
 #define ENGINE_H
@@ -20,15 +20,18 @@
 #define FAR_PLANE    TABLE_FAR_PLANE     // ... or with a corner at or beyond this
 #define GRID_RANGE   TABLE_RENDER_DIST   // per-frame tables cover grid lines +-GRID_RANGE from the camera cell
 
-// projectBox() results. Its out[BOX_OUT_LEN] holds the screen coordinates:
+// projectRecords() results (projected_box_t kind). Its v[BOX_OUT_LEN] holds the screen coordinates:
 //   AXIS: nl nr nt nb fl fr ft fb  (near and far face rectangles: left right top bottom)
 //   GEN:  sx[4] st[4] sb[4]        (the 4 vertical edges: x, top y, bottom y). corner k is
 //                                  0 = (X-1, Z-1), 1 = (X, Z-1), 2 = (X-1, Z), 3 = (X, Z)
+//   RECT: l r t b                  (columns [l, r) and rows [t, b), at least 1 each way)
+// None is classified as inside or partly inside the viewport: fill.S clips by construction, and
+// checks the 4 x values itself to decide whether edges need clamping (cheaper than testing all
+// 12 coordinates here). A box may be partly or (rarely) not at all inside.
 #define BOX_SKIP          0   // nothing on screen
-#define BOX_AXIS_NOCLIP   1   // facing N/E/S/W, all 8 vertices inside the viewport
-#define BOX_AXIS_CLIP     2   // facing N/E/S/W, partly inside
-#define BOX_GEN_NOCLIP    3   // any other yaw, all 8 vertices inside
-#define BOX_GEN_CLIP      4   // any other yaw, may be partly or (rarely) not at all inside
+#define BOX_AXIS          1   // facing N/E/S/W: the near and far faces are rectangles
+#define BOX_GEN           2   // any other yaw
+#define BOX_RECT          3   // level of detail: far enough to be one rectangle, out = l r t b
 #define BOX_OUT_LEN       12
 
 // ---- filled rendering (fill.S) ----
@@ -61,6 +64,15 @@
 #define SKY_COLOUR     0xcc
 #define GROUND_COLOUR  0x55
 
+// ---- level of detail (the defaults of lod_rect_dist and lod_pixel_dist in main.c) ----
+// A box whose nearest corner is at least LOD_RECT_DIST world units deep is drawn as one rectangle
+// (its projected extent, in the colour of the side it shows most), and from LOD_PIXEL_DIST on as a
+// single pixel: 2 projections and one 1-pixel span instead of 12 projections and up to 3 faces.
+// A box spans about 64 / depth pixels, so at 10 units it is a 6 pixel rectangle. Lower values are
+// faster and blockier; values at or beyond the far plane (TABLE_RENDER_DIST) turn a level off.
+#define LOD_RECT_DIST   12
+#define LOD_PIXEL_DIST  36
+
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 
@@ -78,6 +90,10 @@ extern int24_t rotX_[2 * GRID_LEN], rotZ_[2 * GRID_LEN], camY_[GRID_LEN];
 // x3 yaw, and a box's corner offsets from its (X-1, Z-1) corner: (+c, +s), (-s, +c), (c-s, s+c)
 extern int24_t cam_cos3, cam_sin3;
 extern int24_t cam_kxmin3, cam_kxmax3, cam_kzmin3, cam_kzmax3;
+// the middle of those offsets (x3): a box centre is (x00 + kxmid3, z00 + kzmid3)
+extern int24_t cam_kxmid3, cam_kzmid3;
+// level of detail (x3): BOX_RECT when z00 >= cam_lod_rect, one pixel when z00 >= cam_lod_pix
+extern int24_t cam_lod_rect, cam_lod_pix;
 // culling, all x3. With x00/z00 the camera space of corner (X-1, Z-1), a box is kept when
 //   (uint)(z00 - zlo) < zspan    every corner in [NEAR_PLANE, FAR_PLANE)
 //   4 x00 + 5 z00 >= cxl         not entirely left of the view  (xmax >= -1.25 zmax)
@@ -88,17 +104,19 @@ extern int24_t cam_kxmin3, cam_kxmax3, cam_kzmin3, cam_kzmax3;
 extern int24_t cam_zlo, cam_zspan, cam_cxl, cam_cxr, cam_cyl;
 extern uint8_t cam_cardinal;                          // exactly facing N/E/S/W: boxes are axis aligned on screen
 
-// Culls and projects the world voxel [X-1, X] x [Y-1, Y] x [Z-1, Z] into out[BOX_OUT_LEN].
-// Returns BOX_*. For BOX_SKIP, out is partly written or untouched.
-uint8_t projectBox(int24_t X, int24_t Y, int24_t Z, int24_t *out);
-
 // ---- filled rendering ----
 typedef struct {
-    uint8_t kind;               // BOX_* result of projectBox(), never BOX_SKIP
+    uint8_t kind;               // BOX_*, never BOX_SKIP
     uint8_t faces;              // FACE_* bits: facing the camera and not covered by a neighbour
     uint8_t mat;                // index into materials[]
     int24_t v[BOX_OUT_LEN];     // screen coordinates, layout above
 } projected_box_t;
+
+// project.S: for each of the n scene records {X, Y, Z, material, exposed FACE_*}: the faces
+// facing the camera and exposed; if any, culls the world voxel [X-1, X] x [Y-1, Y] x [Z-1, Z] and
+// projects it into the next slot of out[]. Returns how many boxes it kept, in record order
+extern uint8_t face_x[256], face_y[256], face_z[256];  // FACE_* towards the camera, by grid index
+uint8_t projectRecords(const int8_t (*rec)[5], uint8_t n, projected_box_t *out);
 
 // {top, x side, z side, bottom} colour bytes per material (main.c)
 extern const uint8_t materials[MAT_COUNT][4];

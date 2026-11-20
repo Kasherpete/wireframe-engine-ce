@@ -85,15 +85,173 @@ const uint8_t materials[MAT_COUNT][4] = {
 // the scene: x, y, z of each voxel (it spans [X-1, X] x [Y-1, Y] x [Z-1, Z]) and its material
 // (index into materials[], 0 .. MAT_COUNT - 1). The fifth byte is filled in by computeExposure().
 // If the scene changes at runtime, call computeExposure() again
+// static int8_t coordinates[][5] = {
+//         {5, -2, 5, 4},
+//         {5, -1, 5, 4},
+//         {5, 0, 5, 4},
+//         {4, -3, 5, 3},
+//         {6, -3, 5, 3},
+//         {5, -3, 4, 3},
+//         {5, -3, 6, 3},
+// };
+
 static int8_t coordinates[][5] = {
-        {5, -2, 5, 4},
-        {5, -1, 5, 4},
-        {5, 0, 5, 4},
-        {4, -3, 5, 3},
-        {6, -3, 5, 3},
-        {5, -3, 4, 3},
-        {5, -3, 6, 3},
+    {-5, 1, -3, 3},
+    {-5, 1, -2, 11},
+    {-5, 1, -1, 3},
+    {-5, 1, 0, 11},
+    {-5, 1, 1, 3},
+    {-5, 1, 2, 11},
+    {-5, 1, 3, 3},
+    {-5, 1, 4, 11},
+    {-5, 1, 5, 3},
+    {-5, 1, 6, 11},
+    {-5, 1, 7, 3},
+    {-4, 1, -3, 11},
+    {-4, 1, -2, 3},
+    {-4, 1, -1, 11},
+    {-4, 1, 0, 3},
+    {-4, 1, 1, 11},
+    {-4, 1, 2, 3},
+    {-4, 1, 3, 11},
+    {-4, 1, 4, 3},
+    {-4, 1, 5, 11},
+    {-4, 1, 6, 3},
+    {-4, 1, 7, 11},
+    {-3, 1, -3, 3},
+    {-3, 1, -2, 11},
+    {-3, 1, -1, 3},
+    {-3, 1, 0, 11},
+    {-3, 1, 1, 3},
+    {-3, 1, 2, 11},
+    {-3, 1, 3, 3},
+    {-3, 1, 4, 11},
+    {-3, 1, 5, 3},
+    {-3, 1, 6, 11},
+    {-3, 1, 7, 3},
+    {-2, 1, -3, 11},
+    {-2, 1, -2, 3},
+    {-2, 1, -1, 11},
+    {-2, 1, 0, 3},
+    {-2, 1, 1, 11},
+    {-2, 1, 2, 3},
+    {-2, 1, 3, 11},
+    {-2, 1, 4, 3},
+    {-2, 1, 5, 11},
+    {-2, 1, 6, 3},
+    {-2, 1, 7, 11},
+    {-1, 1, -3, 3},
+    {-1, 1, -2, 11},
+    {-1, 1, -1, 3},
+    {-1, 1, 0, 11},
+    {-1, 1, 1, 3},
+    {-1, 1, 2, 11},
+    {-1, 1, 3, 3},
+    {-1, 1, 4, 11},
+    {-1, 1, 5, 3},
+    {-1, 1, 6, 11},
+    {-1, 1, 7, 3},
+    {0, 1, -3, 11},
+    {0, 1, -2, 3},
+    {0, 1, -1, 11},
+    {0, 1, 0, 3},
+    {0, 1, 1, 11},
+    {0, 1, 2, 3},
+    {0, 1, 3, 11},
+    {0, 1, 4, 3},
+    {0, 1, 5, 11},
+    {0, 1, 6, 3},
+    {0, 1, 7, 11},
+    {1, 1, -3, 3},
+    {1, 1, -2, 11},
+    {1, 1, -1, 3},
+    {1, 1, 0, 11},
+    {1, 1, 1, 3},
+    {1, 1, 2, 11},
+    {1, 1, 3, 3},
+    {1, 1, 4, 11},
+    {1, 1, 5, 3},
+    {1, 1, 6, 11},
+    {1, 1, 7, 3},
+    {2, 1, -3, 11},
+    {2, 1, -2, 3},
+    {2, 1, -1, 11},
+    {2, 1, 0, 3},
+    {2, 1, 1, 11},
+    {2, 1, 2, 3},
+    {2, 1, 3, 11},
+    {2, 1, 4, 3},
+    {2, 1, 5, 11},
+    {2, 1, 6, 3},
+    {2, 1, 7, 11},
+    {3, 1, -3, 3},
+    {3, 1, -2, 11},
+    {3, 1, -1, 3},
+    {3, 1, 0, 11},
+    {3, 1, 1, 3},
+    {3, 1, 2, 11},
+    {3, 1, 3, 3},
+    {3, 1, 4, 11},
+    {3, 1, 5, 3},
+    {3, 1, 6, 11},
+    {3, 1, 7, 3},
+    {4, 1, -3, 11},
+    {4, 1, -2, 3},
+    {4, 1, -1, 11},
+    {4, 1, 0, 3},
+    {4, 1, 1, 11},
+    {4, 1, 2, 3},
+    {4, 1, 3, 11},
+    {4, 1, 4, 3},
+    {4, 1, 5, 11},
+    {4, 1, 6, 3},
+    {4, 1, 7, 11},
+    {5, 1, -3, 3},
+    {5, 1, -2, 11},
+    {5, 1, -1, 3},
+    {5, 1, 0, 11},
+    {5, 1, 1, 3},
+    {5, 1, 2, 11},
+    {5, 1, 3, 3},
+    {5, 1, 4, 11},
+    {5, 1, 5, 3},
+    {5, 1, 6, 11},
+    {5, 1, 7, 3},
+    {-3, 0, 2, 6},
+    {-3, -1, 2, 6},
+    {-3, 0, 3, 6},
+    {-3, -1, 3, 6},
+    {-3, 0, 4, 6},
+    {-3, -1, 4, 6},
+    {-3, 0, 5, 6},
+    {-3, -1, 5, 6},
+    {-3, 0, 6, 6},
+    {-3, -1, 6, 6},
+    {-3, 0, 7, 6},
+    {-3, -1, 7, 6},
+    {3, 0, 0, 8},
+    {3, -1, 0, 8},
+    {3, -2, 0, 8},
+    {3, -3, 0, 8},
+    {0, -4, 4, 12},
+    {1, -4, 4, 12},
+    {2, -4, 4, 12},
+    {1, -4, 5, 12},
+    {5, -2, 5, 4},
+    {5, -1, 5, 4},
+    {5, 0, 5, 4},
+    {4, -3, 5, 11},
+    {6, -3, 5, 11},
+    {5, -3, 4, 11},
+    {5, -3, 6, 11},
+    {-8, 0, 14, 9},
+    {-4, 0, 14, 9},
+    {0, 0, 14, 9},
+    {4, 0, 14, 9},
+    {8, 0, 14, 9}
 };
+
+
 
 // Player state. Position is 16.16 fixed point world units. Yaw is in 1/65536 of an angle step,
 // with 256 steps per turn, so 24 bits are exactly one turn and wrapping is just turning past 360
@@ -192,13 +350,13 @@ void swapBuffer() {
 // turning never re-sorts.
 //
 // sortScene() calls sortRecords() in sort.S: a counting sort (stable, no comparisons) over keys
-// 0 .. 3 GRID_RANGE, through a scratch copy. 5.3k cycles for the 7-box scene, 59k for 120 boxes.
+// 0 .. 3 GRID_RANGE, through a scratch copy. 74k cycles for the 153-box test scene.
 
 // gridDist[n] = |n - GRID_RANGE|: the distance in cells along one axis, for the grid index
-// n = X + cam_bias_x (the one projectBox() uses). The box spans cell X - 1 and the camera is in
+// n = X + cam_bias_x (the one projectRecords() uses). The box spans cell X - 1 and the camera is in
 // cell (player x >> 16), so n - GRID_RANGE is their difference (likewise y and z).
-// It is indexed by the low byte of n only, so all 256 entries exist. For every box projectBox()
-// keeps, n is in [0, 2 GRID_RANGE) and the low byte is n itself. For a culled box the low byte
+// It is indexed by the low byte of n only, so all 256 entries exist. For every box
+// projectRecords() keeps, n is in [0, 2 GRID_RANGE) and the low byte is n itself. For a culled box the low byte
 // may wrap to any entry, which is harmless: where a culled box sorts does not matter. So the key
 // is three 8-bit adds and lookups, with no sign extension or range check. Defined in sort.S,
 // page-aligned
@@ -281,6 +439,39 @@ static const uint8_t axis_corners[4][4] = {
 };
 
 
+// Level of detail (engine.h): world units from which a box becomes a rectangle, then a pixel.
+// Variables, so a game can change them at runtime (e.g. a quality setting): setupCamera reads
+// them every frame. At or beyond the far plane (GRID_RANGE) a level is off
+uint8_t lod_rect_dist = LOD_RECT_DIST;
+uint8_t lod_pixel_dist = LOD_PIXEL_DIST;
+
+// The colour of a BOX_RECT box by its FACE_* bits (fill.h, lod_slot): far away a side shows far
+// more than a top (that shrinks with height / depth), so the side faced most if visible, then the
+// other side, then the top or bottom. zfirst: the z sides are faced more than the x sides
+static uint8_t lod_zfirst = 2;  // none yet
+
+static void initLodSlots(uint8_t zfirst) {
+    for (uint8_t m = 0; m < 64; m++) {
+        const uint8_t zs = m & (FACE_ZP | FACE_ZN), xs = m & (FACE_XP | FACE_XN);
+        uint8_t slot = (m & FACE_TOP) ? MAT_TOP : MAT_BOTTOM;
+        if (zfirst) {
+            if (zs) {
+                slot = MAT_ZSIDE;
+            } else if (xs) {
+                slot = MAT_XSIDE;
+            }
+        } else {
+            if (xs) {
+                slot = MAT_XSIDE;
+            } else if (zs) {
+                slot = MAT_ZSIDE;
+            }
+        }
+        lod_slot[m] = slot;
+    }
+}
+
+
 // t[n * stride] = 3 * (n - GRID_RANGE - frac/256) * k, by repeated addition. Built unscaled and
 // then tripled so every entry is an exact multiple of 3 (project.S uses them as byte offsets)
 static void fillRotTable(int24_t *t, uint8_t stride, int24_t k, int24_t frac) {
@@ -330,6 +521,20 @@ static void setupCamera(void) {
     cam_kxmax3 = MAX(0, c3) + MAX(0, -s3);
     cam_kzmin3 = MIN(0, s3) + MIN(0, c3);
     cam_kzmax3 = MAX(0, s3) + MAX(0, c3);
+
+    // box centre offsets: multiples of 3 between the min and max offsets
+    cam_kxmid3 = 3 * ((cam_kxmin3 + cam_kxmax3) / 6);
+    cam_kzmid3 = 3 * ((cam_kzmin3 + cam_kzmax3) / 6);
+
+    // level of detail: by the depth of the nearest corner, z00 + kzmin3
+    cam_lod_rect = 3 * SUB * (int24_t)lod_rect_dist - cam_kzmin3;
+    cam_lod_pix  = 3 * SUB * (int24_t)lod_pixel_dist - cam_kzmin3;
+    // a rectangle shows the side faced most: the z sides while looking more along z than x
+    const uint8_t zfirst = (c < 0 ? -c : c) >= (s < 0 ? -s : s);
+    if (zfirst != lod_zfirst) {
+        lod_zfirst = zfirst;
+        initLodSlots(zfirst);
+    }
 
     // culling constants, see engine.h
     cam_zlo   = 3 * NEAR_PLANE - cam_kzmin3;
@@ -398,13 +603,13 @@ static void computeExposure(void) {
 // The faces of a box that face the camera (FACE_*), from d = box cell - camera cell on each axis:
 // the +x face (at X) faces the camera exactly when the camera is in a cell right of the box's, and
 // so on; d = 0 means the camera is level with the box on that axis, so neither face is visible.
-// With n = X + cam_bias_x (the grid index projectBox uses) d is n - GRID_RANGE, so the bits are
+// With n = X + cam_bias_x (the grid index projectRecords uses) d is n - GRID_RANGE, so the bits are
 // tables indexed by the low byte of n: three 8-bit adds and lookups per box. n wraps for boxes
-// beyond GRID_RANGE, which projectBox culls anyway (as in sortRecords). C with int24 compares
-// cost about 1k cycles per box
-static uint8_t face_x[256], face_y[256], face_z[256];
+// beyond GRID_RANGE, which projectRecords culls before it looks (as in sortRecords). C with int24
+// compares cost about 1k cycles per box. face_x, face_y and face_z are in project.S, on
+// consecutive pages
 
-// n >= 2 GRID_RANGE: a box projectBox culls, so no faces (ifs: see the compiler bug in CLAUDE.md)
+// n >= 2 GRID_RANGE: a box projectRecords culls, so no faces (ifs: see the compiler bug in CLAUDE.md)
 static void initFaceTables(void) {
     uint8_t n = 0;
     do {
@@ -424,32 +629,13 @@ static void initFaceTables(void) {
 
 
 // Culls and projects every box into projected[], without drawing. Boxes stay in the order of
-// coordinates[], which sortScene() keeps far to near. main() calls this before
-// waitForBufferScan(), so it runs in time that would otherwise be spent waiting for the LCD
+// coordinates[], which sortScene() keeps far to near. A box with no face both towards the camera
+// and not covered by a neighbour is skipped before projecting (its silhouette is covered by
+// nearer neighbours). The loop, the face test and the projection are all in project.S: in C the
+// loop and the call cost about 650 cycles per record. main() calls this before waitForBufferScan(),
+// so it runs in time that would otherwise be spent waiting for the LCD
 static void projectScene(void) {
-
-    projected_box_t *p = projected;
-    uint8_t n = 0;
-    const uint8_t bx = (uint8_t)cam_bias_x, by = (uint8_t)cam_bias_y, bz = (uint8_t)cam_bias_z;
-    for (uint8_t i = 0; i < LEN(coordinates); i++) {
-        const int8_t *c = coordinates[i];
-        // faces both towards the camera and not covered by a neighbour. None: nothing of this
-        // box can show (its silhouette is covered by nearer neighbours), so skip projecting it
-        const uint8_t faces = (face_x[(uint8_t)(c[0] + bx)] | face_y[(uint8_t)(c[1] + by)] |
-                               face_z[(uint8_t)(c[2] + bz)]) & (uint8_t)c[4];
-        if (faces == 0) {
-            continue;
-        }
-        const uint8_t kind = projectBox(c[0], c[1], c[2], p->v);
-        if (kind != BOX_SKIP) {
-            p->kind = kind;
-            p->faces = faces;
-            p->mat = (uint8_t)c[3];
-            p++;
-            n++;
-        }
-    }
-    num_projected = n;
+    num_projected = projectRecords(coordinates, LEN(coordinates), projected);
 }
 
 
@@ -559,7 +745,7 @@ static void updateMotion(uint8_t keys, uint24_t dt) {
         }
         if (snapping) {
             if (off < SNAP_DONE && off > -SNAP_DONE) {
-                player_yaw -= off;  // exactly N/E/S/W: projectBox takes the fast path
+                player_yaw -= off;  // exactly N/E/S/W: projectRecords takes the fast path
                 turn_vel = 0;
                 snapping = 0;
             } else {

@@ -92,7 +92,9 @@ static void rasterChain(uint8_t *out, const int24_t *vx, const int24_t *vy, uint
     }
 }
 
-// Row y: emits the parts of [xl, xr) still open, front to back, and closes them
+// Row y: emits the parts of [xl, xr) still open, front to back, and closes them. The intervals are
+// unordered here; fill.S keeps them sorted, which changes which interval is looked at first but
+// not which pixels a face gets (they are disjoint, and a split happens inside just one)
 static void coverRow(uint8_t y, uint8_t xl, uint8_t xr, uint8_t colour) {
     if (xr > VIEW_W) {
         xr = VIEW_W;
@@ -181,10 +183,33 @@ static const uint8_t face_corners[6][4] = {
 };
 static const uint8_t face_mat[6] = {MAT_XSIDE, MAT_XSIDE, MAT_ZSIDE, MAT_ZSIDE, MAT_TOP, MAT_BOTTOM};
 
+static uint8_t clamp8(int24_t x) {
+    return x < 0 ? 0 : x > 255 ? 255 : (uint8_t)x;
+}
+
+// level of detail: one rectangle, columns [l, r) and rows [t, b), in the colour lod_slot picks
+static void fillRect(const projected_box_t *p) {
+    const int24_t *v = p->v;
+    const uint8_t colour = materials[p->mat][lod_slot[p->faces]];
+    const uint8_t xl = clamp8(v[0] - VIEW_X0), xr = clamp8(v[1] - VIEW_X0);
+    const int24_t y0 = v[2] > 0 ? v[2] : 0;
+    const int24_t y1 = v[3] < VIEW_H ? v[3] : VIEW_H;
+    for (int24_t y = y0; y < y1; y++) {
+        roomForRow();
+        if (gap_n[y] != 0 && xl < xr) {
+            coverRow((uint8_t)y, xl, xr, colour);
+        }
+    }
+}
+
 static void fillBox(const projected_box_t *p) {
     int24_t sx[8], sy[8];       // corner k: (sx[k], sy[k]) top, (sx[k + 4], sy[k + 4]) bottom
     const int24_t *v = p->v;
-    if (p->kind >= BOX_GEN_NOCLIP) {
+    if (p->kind == BOX_RECT) {
+        fillRect(p);
+        return;
+    }
+    if (p->kind == BOX_GEN) {
         for (uint8_t k = 0; k < 4; k++) {
             sx[k] = sx[k + 4] = v[k];
             sy[k] = v[4 + k];

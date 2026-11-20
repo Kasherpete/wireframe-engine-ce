@@ -7,7 +7,7 @@ its `graphx`, `keypadc` and `fontlibc` libraries.
 | File | Contents |
 |---|---|
 | `src/main.c` | display setup, buffers, input and movement, per-frame camera setup, the scene, materials, `computeExposure`, `projectScene`, main loop |
-| `src/project.S` | `projectBox`: per-box culling, projection and clip classification, hand-written assembly |
+| `src/project.S` | `projectRecords`: the loop over the scene records (exposure and facing test, culling, projection, level of detail), hand-written assembly |
 | `src/fill.S` | `fillScene` / `drawSpans`: the filled rasterizer with hidden surface removal (see Filled rendering) |
 | `src/fill.h` | its interface and span-list constants |
 | `src/fill_ref.c` | the same rasterizer in plain C, compiled only with `-DFILL_REFERENCE`, to verify `fill.S` against |
@@ -15,6 +15,7 @@ its `graphx`, `keypadc` and `fontlibc` libraries.
 | `src/sort.S` | `sortRecords`: the painter's sort of the scene (see Painter's order), and `gridDist` |
 | `src/engine.h` | constants and per-frame camera state shared by `main.c`, `project.S` and `fill.S`; the `projected_box_t` layout |
 | `src/projection_tables.{h,c}` | **generated** by `utils/gen_tables.py`; don't edit |
+| `utils/bench/` | benchmark and verification harness: `run_bench.sh` (see Filled rendering, Verification) |
 
 ## Priorities
 
@@ -166,9 +167,10 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
    cycles (1.3 ms).
 3. `setupCamera()` builds the per-frame camera state (below). If the camera is in another grid
    cell than the scene was sorted for, `sortScene()` re-sorts `coordinates[]` (see Painter's order).
-4. `projectScene()` works out each box's faces to draw (facing the camera and exposed, see Filled
-   rendering), skips boxes with none, and culls and projects the rest (`projectBox`) into
-   `projected[]`, keeping only the boxes that aren't `BOX_SKIP`, in scene order (far to near).
+4. `projectScene()` calls `projectRecords` (`project.S`), which loops over the scene records,
+   culls each box, skips boxes with no face to draw (facing the camera and exposed, see Filled
+   rendering), and projects the rest into `projected[]`, in scene order (far to near). Distant
+   boxes become one rectangle or pixel (Level of detail).
    Then `fillScene()` rasterizes them front to back into the span list. Neither touches a frame
    buffer, so both run before the wait: while the work fits, it overlaps the LCD showing the last
    frame, and only phase 6 is tied to the refresh. Anything else that doesn't touch the back
@@ -182,8 +184,8 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
    - `swapBuffer` must write `lcd_UpBase` before acknowledging the flag. The other way round, a
      refresh in between sets the flag for the old base and the next frame draws into the
      buffer still on screen.
-6. `drawSpans()`: the background (about 70k cycles, `push` fills row by row; skipped when boxes
-   cover every row), then the spans.
+6. `drawSpans()`: the background (about 70k cycles for the whole viewport, `push` fills row by
+   row, only in rows boxes didn't close), then the spans.
 7. `make hud` builds only (about 60k cycles): draw the HUD with fontlib: FPS, `D` (this frame's
    scene: projection and rasterization before the wait plus `drawSpans` after it) and `F` (the previous
    frame's total work, excluding `waitForBufferScan`) in ms. Timer 2 is free-running; `CYCLES()` reads it and differences are valid up to 349 ms.
@@ -220,28 +222,51 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
   `project.S` is stored **×3**. An `int24_t` table entry is 3 bytes, so a ×3 value is directly a
   byte offset. Per-frame values must stay exact multiples of 3 (`fillRotTable` builds them
   unscaled, then triples them).
-- **Rotation, per frame** (`setupCamera`, C): for each grid line within `GRID_RANGE` (24) of the
+- **Rotation, per frame** (`setupCamera`, C): for each grid line within `GRID_RANGE` (40) of the
   camera cell, tables of `(line − player) × cos/sin`, built by repeated addition, interleaved as
   `rotX_ = {XC, XS}` and `rotZ_ = {ZS, ZC}`. A grid point's camera space is
   `x' = XC − ZS`, `z' = XS + ZC`, so a box corner costs two lookups and an add, and the other
-  three corners are fixed per-frame offsets (`cam_k*3`). Also per frame: `camY_`, the index
-  biases and the culling constants. The full list is in `engine.h`.
-- **Projection, per box** (`projectBox` in `project.S`): table lookups only.
-  `64 * a / z = expTable[logTable[|a|] − logTable[z] − EXP_TABLE_MIN]`. logTable entries are
-  ×3 too, so the difference of two entries is a byte offset into expTable.
-  - Registers: after the table lookups IX points at `.Lvars`. Only once a box survives culling
-    is `out` read from the stack into IY, so culled boxes don't pay for it. `.Lvars` holds
-    the locals and the per-frame camera scalars (`cam_cos3` … `cam_cardinal`, defined in
-    `project.S`, written by `setupCamera`), addressed as `(ix + V_*)`: 3 bytes per access
-    against 4–5 for an absolute address. The `V_*` offsets are `#define`s, because the
-    assembler won't take a later label difference as a displacement. `.if` checks at the end of
-    the file make the assembly fail if they stop matching the labels, or the block grows past
-    128 bytes. The grid biases and tables stay in `main.c`, read before IX is set.
+  three corners are fixed per-frame offsets (`cam_k*3`, and their middles `cam_k*mid3`). Also
+  per frame: `camY_`, the index biases, the culling constants and the level of detail
+  thresholds. The full list is in `engine.h`.
+- **Projection** (`projectRecords` in `project.S`, called once per frame with the whole scene):
+  table lookups only. `64 * a / z = expTable[logTable[|a|] − logTable[z] − EXP_TABLE_MIN]`.
+  logTable entries are ×3 too, so the difference of two entries is a byte offset into expTable.
+  - Per record, cheapest rejection first: the exposed byte (0: enclosed, skip), the x and z grid
+    lookups and the depth test, the side tests, then the y lookup and the above/below tests, and
+    only then the facing test. Most records are culled (behind or beside the camera), so the
+    order matters: it cut projection by about 11%.
+  - The grid index is checked in 16 bits (`GRID_INDEX`): the record byte sign-extended, plus the
+    camera bias patched into an `ld de, nn`. The camera cell is an int16, so that is exact.
+  - Registers: IX points at `.Lvars` throughout. `.Lvars` holds the locals, the loop state and
+    the per-frame camera scalars (`cam_cos3` … `cam_lod_pix`, defined in `project.S`, written
+    by `setupCamera`), addressed as `(ix + V_*)`: 3 bytes per access against 4–5 for an
+    absolute address. The `V_*` offsets are `#define`s, because the assembler won't take a
+    later label difference as a displacement. `.if` checks at the end of the file make the
+    assembly fail if they stop matching the labels, or the block grows past 128 bytes. IY points
+    at the record, then the rotation tables, then (once a box is kept) its `projected[]` slot.
+  - **Self-modifying code:** the camera biases are patched into the face test's `add a, n` and
+    the grid index's `ld de, nn` once per call.
+  - `face_x/y/z` (which faces point at the camera, by grid index) are three consecutive pages,
+    1024-aligned, in `project.S`'s bss: `inc h` steps from one to the next.
 - **Culling** happens in camera space before projecting: any corner nearer than `NEAR_PLANE`
-  (0.5 units) or at/beyond `FAR_PLANE` (24 units), or the whole box left/right of
+  (0.5 units) or at/beyond `FAR_PLANE` (40 units), or the whole box left/right of
   `|x| ≤ 1.25 z` (tested as 4x against 5z, so no division), or above/below `|y| ≤ z` (a little
   wider than the view, which is fine). A box straddling the near plane is skipped rather than clipped, so boxes
   vanish when you walk into them.
+- **Level of detail.** A box whose nearest corner is at least `lod_rect_dist` units deep
+  (default `LOD_RECT_DIST` = 12 in `engine.h`) becomes `BOX_RECT`: the rectangle of its x and y
+  extent projected at its centre depth (4 projections instead of 8–12, and one rectangle instead
+  of up to 3 faces in `fill.S`). From `lod_pixel_dist` (default 36) on it is a single pixel at
+  its projected centre (2 projections). The colour is the material's side the camera faces most
+  (`lod_slot`, rebuilt by `initLodSlots` when the dominant axis changes): at a distance sides
+  show far more than tops. `lod_rect_dist` and `lod_pixel_dist` are variables in `main.c`, read
+  every frame, so a game can change them at runtime; a value at or beyond the far plane turns a
+  level off. A box is about 64 / depth pixels wide: 5 px at 12 units, 1.8 px at 36.
+  - Measured on a 241-box scene reaching 36 units (`SCENE=far` in `utils/bench`, 60 views):
+    LOD off 103M cycles, 12/36 75M (−27%), 8/24 70M (−32%). On the 153-box scene the default
+    hardly changes anything (few boxes are 12 units away). At 12/36 the picture is nearly
+    identical to LOD off; at 6/20 2–3 px blocks visibly shrink to dots.
 - **The culling bounds every table index.** `gen_tables.py` proves (with asserts) that for any
   box passing these exact tests, every logTable/expTable index is in range, so `project.S` has
   no range checks. **If you change the culling, change the generator's proof with it.** The
@@ -251,29 +276,29 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
     `VIEW_HALF_WIDTH / FOCAL_LENGTH`. `project.S` hard-codes 5/4 and `#error`s if they change.
 - **Regenerating tables:** edit the constants at the top of `utils/gen_tables.py`
   (`SUBUNITS`, `FOCAL_LENGTH`, `VIEW_HALF_WIDTH`, `RENDER_DIST`, `NEAR_PLANE`, `LOG_STEPS`…)
-  and run `python3 utils/gen_tables.py`. It writes `src/projection_tables.{h,c}` (about 25 KB
-  of tables). `main.c` static-asserts the assumptions it makes, e.g. `VIEW_HALF_WIDTH` is half
-  `VIEWPORT_LENGTH`.
+  and run `python3 utils/gen_tables.py`. It writes `src/projection_tables.{h,c}` (about 35 KB
+  of tables at `RENDER_DIST` 40). `main.c` static-asserts the assumptions it makes, e.g.
+  `VIEW_HALF_WIDTH` is half `VIEWPORT_LENGTH`.
+  - `RENDER_DIST` is also `GRID_RANGE`. Sort keys (up to 3·`GRID_RANGE`) are bytes, so it can
+    go up to 85. The log table grows by about 480 bytes per unit; the whole program is 53 KB
+    uncompressed at 40 (18 KB `.8xp`), so it stays well under the 64 KB limit.
 
 ## Clipping conventions
 
-- `projectBox` returns `BOX_SKIP`, `BOX_AXIS_NOCLIP/CLIP` (exactly facing N/E/S/W: near and far
-  faces are rectangles, 8 coordinates) or `BOX_GEN_NOCLIP/CLIP` (any other yaw: the 4 vertical
-  edges, 12 coordinates). Its `out` argument (`BOX_OUT_LEN` entries, a `projected[]` slot)
-  receives the coordinates (layout in `engine.h`). `fill.S` turns both layouts into the same 8
-  vertices (`cam_axis_corner` maps the AXIS edges to world corners).
-- `fill.S` clips by construction (spans only inside open intervals, rows clipped to the
-  viewport), so it needs no `_NoClip` guarantee; it only uses `*_NOCLIP` to skip the clamping
-  of edge x values. The rules below still hold for anything drawn with graphx.
-- A `*_NOCLIP` result must be proven against **all** 8 vertices before any `_NoClip` call.
-  - Axis case: each far vertex lies between the screen centre and its near vertex, and the
-    centre is inside the viewport. So the near face being inside proves the whole box is, and
-    the far face alone decides whether it is entirely off screen.
-  - General case: all 12 coordinates are tested. There's no screen-space skip test (camera-space
-    culling already removed nearly everything), so `BOX_GEN_CLIP` may occasionally be entirely
-    off screen. The clipped calls handle that.
-- `_NoClip` graphx functions take `uint8_t` y and `uint24_t` lengths: negatives wrap to huge
-  values. Clipped versions take `int`.
+- `projected_box_t.kind` is `BOX_AXIS` (exactly facing N/E/S/W: near and far faces are
+  rectangles, 8 coordinates), `BOX_GEN` (any other yaw: the 4 vertical edges, 12 coordinates) or
+  `BOX_RECT` (level of detail: `l r t b`, at least one pixel each way). Layouts in `engine.h`.
+  `fill.S` turns both box layouts into the same 8 vertices through a face table per layout
+  (`.Lfaces_axis` is rebuilt per frame from `cam_axis_corner`).
+- Nothing is classified as inside or partly inside the viewport any more (the old `*_NOCLIP`
+  kinds). `fill.S` clips by construction (spans only inside open intervals, rows clipped to the
+  viewport) and checks the 4 x values itself to decide whether edges need clamping: cheaper than
+  testing all 12 coordinates in `project.S` (that saved about 500 cycles per kept box).
+- A box may be partly or (rarely) not at all inside: there's no screen-space skip test except in
+  the AXIS path (the far face decides whether it is entirely off screen).
+- If anything is ever drawn with graphx `_NoClip` calls again: they take `uint8_t` y and
+  `uint24_t` lengths, so negatives wrap to huge values, and a result must be proven against
+  **all** 8 vertices first. Clipped versions take `int`.
 
 ## Painter's order
 
@@ -293,23 +318,24 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
   (keys 0 … 3·`GRID_RANGE`) through a scratch copy, in three passes (key and count, prefix,
   place) plus an `ldir` back. Records are 5 bytes: x, y, z, material, exposed faces
   (`REC_SIZE` in `sort.S`).
-  - `gridDist`, the counts and the per-key start pointers each begin on a 256-byte boundary
-    (`.balign 256` in `sort.S`'s bss), so `ld e,a` / `ld l,a` / `ld ixl,a` index them with no add.
-    The tables take 731 bytes of bss.
+  - `gridDist`, the counts and the per-key start indices each begin on a 256-byte boundary
+    (`.balign 256` in `sort.S`'s bss), so `ld e,a` / `ld l,a` index them with no add. A start is
+    a record index (a byte, placed with `mlt` by `REC_SIZE`), so all 256 keys fit a page. The
+    tables take 768 bytes of bss.
   - **Self-modifying code:** the three bias bytes and the running maximum key are patched into
     `add a,n` / `cp a,n` immediates, which frees registers for `djnz`. This works because
     programs run from RAM (graphx does the same).
   - The prefix pass only visits keys max … 0, touches only the count of an empty key, and zeroes
     each used count as it reads it: the counts must be zero on entry, and are on exit.
   - Key per axis: `gridDist[(uint8_t)(X + cam_bias_x)]`, a 256-entry table. For every box
-    `projectBox` keeps, the grid index is in [0, 48), so its low byte is exact; a culled box may
+    `projectRecords` keeps, the grid index is in [0, 2·`GRID_RANGE`), so its low byte is exact; a culled box may
     get a wrapped key, which doesn't matter. That makes the key three 8-bit adds and lookups.
     Range-checking the 24-bit index instead made the sort ~35% slower.
-- Cost per sort (measured with 4-byte records; 5-byte ones copy one byte more per box): 5.3k
-  cycles for the 7-box scene, 59k for 120 boxes (about 470 per box). The
-  same sort in C took 7.9k and 127k; the old once-a-second `qsort` (world-space comparator with
-  `abs` calls) took 41k–48k and 1.1M–1.8M.
-- An earlier version sorted the kept boxes every frame (key computed in `projectBox`, bucket
+- Cost per sort: 74k cycles for the 153-box scene (78k with the earlier 3-byte start pointers;
+  with 4-byte records 5.3k for 7 boxes and 59k for 120). The same sort in C took 7.9k and 127k;
+  the old once-a-second `qsort` (world-space comparator with `abs` calls) took 41k–48k and
+  1.1M–1.8M.
+- An earlier version sorted the kept boxes every frame (key computed in the then `projectBox`, bucket
   lists walked in asm): 19k cycles per frame for 36 kept boxes, about 1.1M per second at 60 FPS.
   Sorting on cell change costs nothing standing still and about 0.24–0.35M per second walking
   through the 120-box scene, as one ~1.2 ms spike on each crossing frame.
@@ -319,50 +345,81 @@ VRAM is 0xD40000–0xD657FF (153,600 bytes), split into four 38,400-byte (0x9600
 The file's header comment is the detailed description; this is the map.
 
 - **Front to back with per-row coverage.** Each viewport row keeps a list of x intervals not yet
-  covered (at most `GAP_MAX` = 11, in a 32-byte block per row). Boxes are visited near to far.
-  Each face to draw is a convex quad on screen: per row it covers `[xl, xr)`. Only the parts
-  inside open intervals become spans, and those parts are removed from the intervals. So a
-  hidden pixel is never written, and once every row is closed, farther boxes aren't looked at.
+  covered (at most `GAP_MAX` = 11, in a 32-byte block per row), **sorted left to right and ended
+  by a sentinel** `[255, 255]`. Boxes are visited near to far. Each face to draw is a convex
+  quad on screen: per row it covers `[xl, xr)`. Only the parts inside open intervals become
+  spans, and those parts are removed from the intervals. So a hidden pixel is never written, and
+  once every row is closed, farther boxes aren't looked at.
+  - Rows with one interval have a path of their own (four cases, no loop). With several, a face
+    skips the intervals left of it in a 3-instruction loop and stops at the first one right of
+    it; a split moves the rest up one place (`lddr`), a closed interval moves them down (`ldir`).
+    About 2/3 of the rows a face visits have several intervals (a pillar or a nearer tile splits
+    them), so this path matters: the unordered list scanned every interval.
 - **Rows, not columns.** A column version was written first and was about twice as slow on
   floors: a floor tile is several times wider than tall on screen, and the cost is per line of a
   face. Tall narrow faces (the tree trunk) are the bad case for rows.
 - **Faces to draw** = facing the camera (sign of box cell − camera cell per axis, three
-  byte-indexed tables in `projectScene`) **and exposed**: not shared with a neighbouring voxel
+  byte-indexed tables `face_x/y/z`) **and exposed**: not shared with a neighbouring voxel
   (`computeExposure`, once at startup, stored as the 5th byte of each scene record). A floor then
   costs one face per voxel instead of three, and an enclosed voxel isn't even projected.
   Without exposure culling the hidden side faces of floor tiles dominated the cost.
+- **Face tables:** a box's coordinates are copied into `.Lpage` (`ldir`, 36 bytes), and a face is
+  a 16-byte entry: its 4 vertices clockwise, twice over (so a side never wraps), each as the page
+  offsets of its x and y. The right side runs forwards from the top vertex, the left side
+  backwards from its copy four entries on; a side stops at the first vertex at or below the last
+  row (the bottom vertex always is).
+- **Level of detail:** a `BOX_RECT` writes the same `[xl, xr)` into all its rows and uses the same
+  row loop: no edges, no face setup.
 - **Shading:** `materials[16]` in `main.c` gives each palette colour a top, x-side, z-side and
   bottom colour byte (the z sides are dithered: the two nibbles of a byte are two LCD pixels).
   Scene records hold a material index, not a colour byte.
 - **Edges** step x per row with 16 fractional bits; slopes come from `recipTable` (generated by
-  `gen_tables.py`, `round(2^24 / dy)`) and `mlt`, with no division. Shared edges are computed from
-  the same two vertices in the same direction, so faces meet without cracks.
-- **Two phases.** `fillScene` (before the wait) only writes 6-byte span records, with `push` while
-  SP points into the list in `DBL_BUF1`. `drawSpans` (after the wait) fills the background with
-  `push` row by row, then pops the records and jumps into a 256-aligned unrolled `ld (hl),a /
-  inc hl` loop. Both run with interrupts disabled and restore the previous state.
+  `gen_tables.py`, `round(2^24 / dy)`) and `mlt`, with no division, and no slope at all for a
+  vertical edge (two of every side face) or a one-row edge. Shared edges are computed from the
+  same two vertices in the same direction, so faces meet without cracks. Only an edge with an
+  end outside x 0..255, in a box with one, runs the clamping loop.
+- **Two phases.** `fillScene` (before the wait) only writes span records, with `push` while SP
+  points into the list in `DBL_BUF1`. `drawSpans` (after the wait) fills the background with
+  `push` row by row in the rows still open (a closed row is entirely covered by spans), then pops
+  the records. A short span (< `LONG_MIN` = 28 px, 6 bytes) jumps into a 256-aligned unrolled
+  `ld (hl),a / inc hl` loop (10.4 cycles per pixel). A long one (9 bytes, with the colour ×3)
+  goes through a stub that writes `len % 3` pixels and then jumps into an unrolled run of
+  `push bc` (3.3 per pixel, about 200 more per span); `.Llong_tab` gives the stub and the entry
+  by length. Both phases run with interrupts disabled and restore the previous state.
+  - `LONG_MIN` 16/28/40/never gave totals within 0.3% of each other on the 153-box views (its
+    spans are mostly short floor tiles); it matters in the worst frames, e.g. standing at a wall,
+    where a 160-px row costs about 0.5k instead of 1.7k cycles.
 - **Self-modifying code:** the face colour is patched into the row loop's `ld c, n`, as `sort.S`
   does with its biases.
-- **Overflow:** a row with more than `GAP_MAX` separate holes drops the rightmost part (it shows
-  the background). A full span list is drawn early (`waitForBufferScan` + `drawSpans`), so the
-  phase split is lost for that frame but nothing breaks.
+- **Overflow:** a row with more than `GAP_MAX` separate holes drops the rightmost part of the split
+  interval. The row is marked (block byte +3), so it gets the background even once closed. A
+  full span list is drawn early (`waitForBufferScan` + `drawSpans`), so the phase split is lost
+  for that frame but nothing breaks.
 - **Memory safety:** spans only ever lie inside open intervals, intervals only shrink from
   `[0, VIEW_W)`, rows are clipped to `[0, VIEW_H)`. Keep it that way: it is what makes arbitrary
-  projected coordinates safe.
-- **Verification:** `fill_ref.c` is the same algorithm in C and must draw exactly the same frame.
-  A scratch harness built with `-DFILL_REFERENCE` (replace `main()`: for a few hundred
-  pseudo-random camera positions and yaws, a quarter of them exactly cardinal, render the
-  153-box test scene with both into two VRAM frames and count differing bytes) found 0
-  differences in 300 views. A deliberately broken reference was caught (28 of 40 views). Rerun
-  it after changing `fill.S` or `fill_ref.c`, and change both together.
-- **Costs** (cycles, measured): about 2k per face plus about 2k per edge of setup, about 500 per
-  face-row (430 for the usual one-interval row, plus the two edge steps), about 50 per span and
-  10.4 per pixel in `drawSpans`.
+  projected coordinates safe. The interval moves stay inside the row's block: a split needs
+  `n < GAP_MAX`, so the sentinel never goes past byte 27 (the row address is at 29).
+- **Verification:** `fill_ref.c` is the same algorithm in C (with unordered intervals: the
+  pixels are the same) and must draw exactly the same frame. `utils/bench/run_bench.sh` builds
+  `bench.c` against a copy of `src/` and runs it in CEmu: pseudo-random camera positions and
+  yaws (a quarter exactly cardinal), cycle totals per phase, every re-sort checked (keys far to
+  near, same records), and with `-DFILL_REFERENCE` both renderers into two VRAM frames with the
+  differing bytes counted. Results are on the last screenshot. The final version found 0
+  differences in 300 views: 100 of the 153-box scene, 100 of `SCENE=far`, 100 with
+  `-DBENCH_LOD_RECT=3 -DBENCH_LOD_PIX=7`. A deliberately broken reference was caught earlier
+  (28 of 40 views). Rerun it after changing `fill.S`, `fill_ref.c` or `project.S`, and change
+  `fill.S` and `fill_ref.c` together. Sort errors hit both renderers alike, hence the sort check.
+- **Costs** (cycles, approximate: from cycle-timer profiles of an instrumented copy): about 1.1k
+  of setup per edge plus 46 per row it covers, about 1.4k per face, about 500 per face-row
+  (one-interval rows less), about 50 per short span and 10.4 per pixel in `drawSpans`.
+  Per 40 views: 2,149 faces, 6,700 edges, 19,600 face-rows (12,700 with several intervals),
+  14,800 spans (1,600 long). 16% of the faces that reach the row loop emit nothing.
 - **If it needs to be faster:**
-  - a `push` path in `drawSpans` for long spans (~3.5 instead of 10.4 cycles per pixel)
-  - edges shared between faces computed once
-  - the per-box face test moved into `projectBox`
-  - long spans checked against the row's interval directly instead of the general loop
+  - share projected corners between neighbouring boxes (a floor tile's 4 vertical edges are
+    each shared with up to 3 other tiles): a per-frame cache by grid point
+  - skip a box whose screen bounding box has no open pixel (would save about 3–4%: see above)
+  - step both sides inside the row loop instead of storing x per row and reading it back
+  - edges shared between faces of a box computed once (small here: 1.17 faces per box)
 
 ## eZ80 performance notes
 
@@ -407,14 +464,18 @@ Measured in CEmu with the CPU-cycle timer:
 
   | Scene | projection | `fillScene` | `drawSpans` | `D` |
   |---|---|---|---|---|
-  | the 7-box tree, start view | 34k | 300k | 106k | 9.2 ms (60 FPS) |
-  | 153-box test scene (11×11 floor, wall, pillar, slab, tree), dense views | 400k–580k | 800k–1.5M | 140k–250k | 28–48 ms |
-  | same, nothing in view | 300k | 12k | 74k | 8 ms |
+  | the 7-box tree, start view (before the second pass) | 34k | 300k | 106k | 9.2 ms (60 FPS) |
+  | 153-box test scene (11×11 floor, wall, pillar, slab, tree), dense views (before) | 400k–580k | 800k–1.5M | 140k–250k | 28–48 ms |
+  | same, nothing in view (before) | 300k | 12k | 74k | 8 ms |
+  | 153-box scene, average of 100 `utils/bench` views, before → after the second pass | 499k → 324k | 844k → 683k | 152k → 148k | 31 → 24 ms |
+  | 153-box scene, the start view | | | | 45.5 → 34.9 ms (20 → 25 FPS) |
 
-  On the same 153-box scene and views the old wireframe renderer took `D` 11–38 ms against
-  14–48 ms now, so filling costs about 1.0–1.8× the wireframe. Projection is a large share:
-  `projectBox` + call overhead is about 3.5k cycles per kept box, and the C face test in
-  `projectScene` about 300 per box.
+  Projection: about 3.6k cycles per kept box (GEN), and in the 153-box views 64% of the records
+  are culled, which is why culling runs cheapest test first. In C the loop and the call to the
+  old `projectBox` cost about 650 cycles per scene record on top (measured: moving them into
+  `project.S` saved 10M cycles over 100 views of 153 records).
+- `mlt rr` clears the upper byte of the 24-bit register (the engine relies on that for
+  `ld h, a / ld l, n / mlt hl / add hl, de`).
 - Whole frame, 7-box idle scene, `make hud`, before interlacing and the full-width viewport
   (`F` 9.7 ms): de-interlace 119k, background blit 127k, scene 123k, HUD about 60k,
   `setupCamera` 23k, everything else about 6k cycles. Now, at full width: `F` 8.6 ms

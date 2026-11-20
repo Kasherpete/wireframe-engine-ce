@@ -8,17 +8,17 @@
 ; why the low byte of the grid index is enough). A stable counting sort in three passes over
 ; rec, then scratch is copied back over rec. keys must hold n bytes. n must be 1 .. 255.
 ;
-; Measured per sort (with the earlier 4-byte records): 5.3k cycles for 7 records, 59k for 120 (the
-; same sort in C: 7.9k and 127k, the old qsort: 41k-48k and 1.1M-1.8M). About 470 cycles per
-; record plus a little per key.
+; Measured per sort: 74k cycles for the 153-box test scene (the earlier version with 3-byte start
+; pointers: 78k; with 4-byte records it took 5.3k for 7 records and 59k for 120, the same sort in
+; C 7.9k and 127k, the old qsort 41k-48k and 1.1M-1.8M). About 480 cycles per record.
 ;
 ; Speed tricks:
-; - gridDist, the counts and the start pointers each begin on a 256-byte boundary, so setting the
-;   low byte of a register pair (ld e, a / ld l, a / ld ixl, a) indexes them with no add.
+; - gridDist, the counts and the start indices each begin on a 256-byte boundary, so setting the
+;   low byte of a register pair (ld e, a / ld l, a) indexes them with no add.
 ; - bx, by and bz are written into the add a, n instructions below (self-modifying code: the
 ;   program runs from RAM), which leaves b free for djnz.
-; - The start of each key in scratch is kept as a 24-bit pointer, so placing a record needs no
-;   multiply by the record size.
+; - The start of each key in scratch is kept as a record index (a byte), so the starts of all 256
+;   possible keys fit one page; placing a record multiplies it by REC_SIZE with mlt.
 ; - Pass 1 also tracks the largest key (in a patched cp), so the prefix pass only visits keys
 ;   max .. 0, and for an empty key only tests the count. It clears each used count as it reads
 ;   it, so they are all zero again for the next sort without a separate clear.
@@ -31,8 +31,8 @@
 #define REC_SIZE	5				/* bytes per scene record */
 #define BUCKETS		3 * GRID_RANGE + 1		/* keys 0 .. 3 GRID_RANGE. No parentheses (see CLAUDE.md), so wrap it when multiplying */
 
-#if 3 * (3 * GRID_RANGE) + 2 > 255
-#error "start pointers (3 bytes per key) no longer fit in one 256-byte page"
+#if 3 * GRID_RANGE > 255
+#error "keys are bytes: GRID_RANGE must be at most 85"
 #endif
 
 ; argument offsets from sp after push ix
@@ -94,13 +94,13 @@ _sortRecords:
 	lea	iy, iy + REC_SIZE
 	djnz	.Lkey
 
-	; ---- pass 2: where each key starts in scratch, farthest key first ----
-	; Only keys max .. 0, and an empty key costs just the test: its start pointer is never read.
-	; hl = counts (l = key), ix = start pointers (ixl = 3 key), de = next free record in scratch
+	; ---- pass 2: the index in scratch where each key starts, farthest key first ----
+	; Only keys max .. 0, and an empty key costs just the test: its start is never read.
+	; hl = counts (l = key), de = starts (e = key), c = next free record index
 	ld	iy, 0
 	add	iy, sp
-	ld	de, (iy + A_SCRATCH)
-	ld	ix, .Lstart
+	ld	de, .Lstart
+	ld	c, 0
 	ld	a, (.Lmax + 1)
 	ld	l, a
 	ld	b, a
@@ -116,40 +116,32 @@ _sortRecords:
 
 .Lused:
 	ld	(hl), 0			; clear the count for the next sort
-	ld	c, a
-	ld	a, l
-	add	a, a
-	add	a, l			; 3 key, at most 216: no carry
-	ld	ixl, a
-	ld	(ix + 0), de
-	push	hl
-	sbc	hl, hl
-	ld	l, c
-	push	hl
-	add	hl, hl
-	add	hl, hl
-	add	hl, de
-	pop	de
-	add	hl, de
-	ex	de, hl			; de += REC_SIZE count
-	pop	hl
+	ld	e, l
+	ex	de, hl
+	ld	(hl), c			; where this key starts
+	ex	de, hl
+	add	a, c
+	ld	c, a			; and the next one (n <= 255: no carry)
 	jr	.Lnext
 
 	; ---- pass 3: copy each record to the next free place for its key ----
-	; iy = record, de = keys[i], ix = start pointers (ixl = 3 key), hl = destination
+	; iy = record, ix = keys[i], hl = starts (l = key), de = scratch
 .Lplace_start:
 	ld	b, (iy + A_N)
-	ld	de, (iy + A_KEYS)
+	ld	ix, (iy + A_KEYS)
+	ld	de, (iy + A_SCRATCH)
 	ld	iy, (iy + A_REC)
-	ld	ix, .Lstart
+	ld	hl, .Lstart
 .Lplace:
-	ld	a, (de)
-	inc	de
-	ld	c, a
-	add	a, a
-	add	a, c
-	ld	ixl, a
-	ld	hl, (ix + 0)
+	ld	l, (ix + 0)
+	inc	ix
+	ld	a, (hl)
+	inc	(hl)
+	push	hl
+	ld	h, a
+	ld	l, REC_SIZE
+	mlt	hl
+	add	hl, de			; scratch + REC_SIZE index
 	ld	a, (iy + 0)
 	ld	(hl), a
 	inc	hl
@@ -164,8 +156,7 @@ _sortRecords:
 	inc	hl
 	ld	a, (iy + 4)
 	ld	(hl), a
-	inc	hl
-	ld	(ix + 0), hl
+	pop	hl
 	lea	iy, iy + REC_SIZE
 	djnz	.Lplace
 
@@ -190,5 +181,5 @@ _sortRecords:
 	.global	_gridDist
 _gridDist:	.zero	256		; filled by initGridDist() in main.c
 .Lcount:	.zero	256		; records per key (only BUCKETS used). Zero between sorts
-.Lstart:	.zero	3 * (BUCKETS)	; next free record in scratch per key, 3 bytes each
+.Lstart:	.zero	256		; next free record index in scratch per key
 

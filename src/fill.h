@@ -14,6 +14,9 @@
 #define SPAN_LIST       0xD52C00
 #define SPAN_LIST_END   0xD5C200
 #define SPAN_SIZE       6
+// spans of at least LONG_MIN pixels are drawn with push (3.3 cycles per pixel instead of 10.4,
+// but about 200 more per span): 9-byte records (see fill.S, "Spans")
+#define LONG_MIN        28
 
 #ifndef __ASSEMBLER__
 #include <stdint.h>
@@ -28,6 +31,10 @@ void fillScene(const projected_box_t *boxes, uint8_t n, uint24_t base);
 // boxes cover every column, then draws the spans fillScene listed, and empties the list.
 // Runs with interrupts disabled.
 void drawSpans(void);
+
+// The colour of a BOX_RECT box: lod_slot[faces] is the MAT_* entry of its material to use, by
+// the FACE_* bits projectScene kept. main.c fills it per frame (it depends on the yaw)
+extern uint8_t lod_slot[64];
 
 // main.c
 void waitForBufferScan(void);

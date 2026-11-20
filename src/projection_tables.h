@@ -7,12 +7,12 @@
 #define TABLE_VIEW_HALF_WIDTH 80
 #define TABLE_CULL_X_NUM    5
 #define TABLE_CULL_X_DEN    4
-#define TABLE_RENDER_DIST   24
+#define TABLE_RENDER_DIST   40
 #define TABLE_NEAR_PLANE    64
-#define TABLE_FAR_PLANE     3072
-#define LOG_TABLE_LEN       4021
-#define EXP_TABLE_MIN       -3266
-#define EXP_TABLE_LEN       4019
+#define TABLE_FAR_PLANE     5120
+#define LOG_TABLE_LEN       6581
+#define EXP_TABLE_MIN       -3454
+#define EXP_TABLE_LEN       4207
 #define SIN_TABLE_LEN       256
 #define SCREEN_COORD_MAX    490
 #define RECIP_TABLE_LEN     981
