@@ -138,14 +138,17 @@ compiler path to `CEdev/bin/ez80-clang` and the include path to `CEdev/include` 
 
 ## TODO
 
-- [ ] Merge coplanar faces of big flat objects (walls, steps): the slowest views are large objects
-      made of many 1 x 1 faces up close
+- [x] Merge coplanar faces of big flat objects (walls, steps): side faces in runs of up to 8, one
+      orientation per chunk (tops and vertical merging not yet)
 - [x] Clip boxes at the near plane instead of stretching them
 - [ ] Write runtime world changes back to the file
 - [x] Distance fog (on in every build)
 - [x] Use a scratch AppVar for more memory (bss is nearly full)
 
 ## Changelog
+
+***v1.2.0*** - Merged faces: walls and the sides of steps are drawn as runs of up to 8 faces
+(world format 3). About 4-6% faster up close and walking, the same at a distance.
 
 ***v1.1.0*** - Render distance 16 -> 24 (7 x 7 chunk window, chunks in bss, spare VRAM and a scratch
 AppVar), near-plane clipping (walls no longer vanish when you stand against them), a distance fog

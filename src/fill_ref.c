@@ -13,15 +13,15 @@
 #define VIEW_W   (VIEW_X1 - VIEW_X0)
 
 // the reference keeps its own span list, and emits the background as spans too
-#define SPAN_MAX 3000
+#define SPAN_MAX 2000
 typedef struct {
     uint8_t *addr;
     uint8_t len;
     uint8_t colour;
 } span_t;
-// The span list and the intervals live in DBL_BUF2 above the exposure grid of chunks.c (the
-// bench uses one at a time): bss has no room for them next to the chunks
-#define SPAN_LIST_REF (DBL_BUF2 + DBL_BUF2_FREE)   // chunks.h: no chunks there with FILL_REFERENCE
+// The span list and the intervals live in DBL_BUF2 after the exposure grid of chunks.c and the
+// chunk slots there (CHUNKS_VRAM, fewer with FILL_REFERENCE): bss has no room for them
+#define SPAN_LIST_REF (DBL_BUF2 + DBL_BUF2_FREE + CHUNKS_VRAM * sizeof(chunk_t))
 #define GAP_X0_REF    (SPAN_LIST_REF + SPAN_MAX * 5)
 #define GAP_X1_REF    (GAP_X0_REF + VIEW_H * GAP_MAX)
 _Static_assert(GAP_X1_REF + VIEW_H * GAP_MAX <= DBL_BUF2_END, "the reference arrays must fit DBL_BUF2");
@@ -86,14 +86,14 @@ static int32_t fillSlope(int24_t dx, int24_t dy) {
     return dx < 0 ? -s : s;
 }
 
-// x of the chain of vertices from t to b (stepping dir through the 4, y non-decreasing) for the
+// x of the chain of vertices from t to b (stepping dir through the nv, y non-decreasing) for the
 // rows [y, y1) into out[]: round(x) of the edge, clamped to [0, 255] (from VIEW_W on, every value
 // means "right of the viewport")
-static void rasterChain(uint8_t *out, const int24_t *vx, const int24_t *vy, uint8_t t, int8_t dir,
-                        uint8_t b, int24_t y, int24_t y1) {
+static void rasterChain(uint8_t *out, const int24_t *vx, const int24_t *vy, uint8_t nv, uint8_t t,
+                        int8_t dir, uint8_t b, int24_t y, int24_t y1) {
     uint8_t i = t;
     while (i != b) {
-        const uint8_t j = (uint8_t)(i + dir) & 3;
+        const uint8_t j = dir > 0 ? (i + 1 == nv ? 0 : i + 1) : (i == 0 ? nv - 1 : i - 1);
         const int24_t ya = vy[i], yb = vy[j];
         const int24_t end = (j == b || yb > y1) ? y1 : yb;
         if (end > y) {
@@ -158,10 +158,10 @@ static void coverRow(uint8_t y, uint8_t xl, uint8_t xr, uint8_t colour) {
     gap_n[y] = n;
 }
 
-// A face, corners in clockwise screen order (front faces all come out that way)
-static void fillFace(const int24_t *vx, const int24_t *vy, uint8_t colour) {
+// A face of nv vertices in clockwise screen order (front faces all come out that way)
+static void fillFace(const int24_t *vx, const int24_t *vy, uint8_t nv, uint8_t colour) {
     uint8_t t = 0, b = 0;
-    for (uint8_t k = 1; k < 4; k++) {
+    for (uint8_t k = 1; k < nv; k++) {
         if (vy[k] < vy[t]) {
             t = k;
         }
@@ -180,8 +180,8 @@ static void fillFace(const int24_t *vx, const int24_t *vy, uint8_t colour) {
     if (y0 >= y1) {
         return;
     }
-    rasterChain(e_xr, vx, vy, t, 1, b, y0, y1);     // clockwise from the top: the right side
-    rasterChain(e_xl, vx, vy, t, -1, b, y0, y1);
+    rasterChain(e_xr, vx, vy, nv, t, 1, b, y0, y1);     // clockwise from the top: the right side
+    rasterChain(e_xl, vx, vy, nv, t, -1, b, y0, y1);
     for (int24_t y = y0; y < y1; y++) {
         roomForRow();
         if (gap_n[y] != 0 && e_xl[y] < e_xr[y]) {
@@ -221,11 +221,42 @@ static void fillRect(const projected_box_t *p) {
     }
 }
 
+// A run (fill.S): P points {x, top, bottom}, one face of 2 P vertices, the top ones along the
+// points and the bottom ones back (clockwise for +x and -z faces, the other way round otherwise)
+static void fillRun(const projected_box_t *p) {
+    const uint8_t np = p->faces >> 4, face = p->faces & 15;
+    const int24_t *v = p->v;    // 3 np values, running on into the next slot (engine.h)
+    int24_t fx[2 * RUN_POINTS], fy[2 * RUN_POINTS];
+    const uint8_t rev = (face & (FACE_XN | FACE_ZP)) != 0;
+    for (uint8_t k = 0; k < np; k++) {
+        const uint8_t j = rev ? np - 1 - k : k;
+        fx[k] = v[3 * j] - VIEW_X0;
+        fy[k] = v[3 * j + 1];
+        fx[2 * np - 1 - k] = v[3 * j] - VIEW_X0;
+        fy[2 * np - 1 - k] = v[3 * j + 2];
+    }
+    const uint8_t slot = face & (FACE_ZP | FACE_ZN) ? MAT_ZSIDE : MAT_XSIDE;
+    fillFace(fx, fy, 2 * np, materials[p->mat][slot]);
+}
+
+// the slots box p takes in boxes[]
+static uint8_t boxSlots(const projected_box_t *p) {
+    if (p->kind == BOX_RUN) {
+        const uint8_t np = p->faces >> 4;
+        return np > RUN_SLOT2_POINTS ? 3 : np > RUN_SLOT_POINTS ? 2 : 1;
+    }
+    return 1;
+}
+
 static void fillBox(const projected_box_t *p) {
     int24_t sx[8], sy[8];       // corner k: (sx[k], sy[k]) top, (sx[k + 4], sy[k + 4]) bottom
     const int24_t *v = p->v;
     if (p->kind == BOX_RECT) {
         fillRect(p);
+        return;
+    }
+    if (p->kind == BOX_RUN) {
+        fillRun(p);
         return;
     }
     if (p->kind == BOX_GEN) {
@@ -256,7 +287,7 @@ static void fillBox(const projected_box_t *p) {
                 fx[i] = sx[face_corners[f][i]];
                 fy[i] = sy[face_corners[f][i]];
             }
-            fillFace(fx, fy, m[face_mat[f]]);
+            fillFace(fx, fy, 4, m[face_mat[f]]);
         }
     }
 }
@@ -272,7 +303,7 @@ void fillSceneRef(const projected_box_t *boxes, uint24_t n, uint24_t base) {
     open_rows = VIEW_H;
 
     // front to back: boxes[] is sorted near to far
-    for (const projected_box_t *p = boxes; p != boxes + n && open_rows != 0; p++) {
+    for (const projected_box_t *p = boxes; p < boxes + n && open_rows != 0; p += boxSlots(p)) {
         fillBox(p);
     }
 

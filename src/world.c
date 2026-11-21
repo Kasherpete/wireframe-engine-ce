@@ -19,7 +19,7 @@ _Static_assert(CRC_START == 9, "the checksum must cover everything after it");
 _Static_assert(__builtin_offsetof(world_header_t, size_x) == 32, "world_header_t layout");
 _Static_assert(__builtin_offsetof(world_header_t, spawn_yaw) == 38, "world_header_t layout");
 _Static_assert(__builtin_offsetof(world_header_t, ground) == 39, "world_header_t layout");
-_Static_assert(sizeof(world_chunk_t) == 3 && sizeof(world_voxel_t) == 4, "world record layout");
+_Static_assert(sizeof(world_chunk_t) == 4 && sizeof(world_voxel_t) == 4, "world record layout");
 #endif
 
 const world_header_t *world = NULL;
@@ -50,8 +50,10 @@ uint32_t crc32(uint32_t crc, const void *data, size_t len) {
 
 // ---- opening ----
 
-// every chunk inside the file, after the index, and every voxel in range. The engine relies on it:
-// chunk-local x and z keep the painter order and the grid indices valid, y bounds the sort keys
+// every chunk inside the file, after the index, and every record in range. The engine relies on it:
+// chunk-local x and z keep the painter order and the grid indices valid, y bounds the sort keys, a
+// run is at most RUN_MAX long (project.S has room for that many) and of its chunk's orientation (or
+// the painter order would be wrong for it)
 static uint8_t worldCheck(const uint8_t *data) {
     const world_header_t *h = (const world_header_t *)data;
     if (h->size_x == 0 || h->size_z == 0) {
@@ -73,13 +75,21 @@ static uint8_t worldCheck(const uint8_t *data) {
         if ((uint24_t)c->offset + c->count * sizeof(world_voxel_t) > world_size) {
             return WORLD_BAD_DATA;
         }
+        if (c->runs > WORLD_RUNS_Z) {
+            return WORLD_BAD_DATA;
+        }
+        uint8_t run_faces = 0;
+        if (c->runs == WORLD_RUNS_X) {
+            run_faces = FACE_XP | FACE_XN;
+        }
+        if (c->runs == WORLD_RUNS_Z) {
+            run_faces = FACE_ZP | FACE_ZN;
+        }
         const world_voxel_t *v = (const world_voxel_t *)(data + c->offset);
+        uint8_t in_runs = 0;            // the runs come after the voxels
         for (uint8_t k = c->count; k != 0; k--, v++) {
             // ifs, not a combined test: see the compiler bug in CLAUDE.md
             if (v->xz >= CHUNK_SIZE * CHUNK_SIZE) {
-                return WORLD_BAD_DATA;
-            }
-            if (v->faces > (FACE_XP | FACE_XN | FACE_ZP | FACE_ZN | FACE_TOP | FACE_BOT)) {
                 return WORLD_BAD_DATA;
             }
             if (v->y < WORLD_Y_MIN) {
@@ -88,8 +98,40 @@ static uint8_t worldCheck(const uint8_t *data) {
             if (v->y > WORLD_Y_MAX) {
                 return WORLD_BAD_DATA;
             }
-            if (v->mat >= MAT_COUNT) {
-                return WORLD_BAD_DATA;
+            if (v->faces & FACE_RUN_REC) {
+                // a run: one face of the orientation, length 1 .. RUN_MAX, inside the chunk
+                in_runs = 1;
+                const uint8_t face = v->faces & ~FACE_RUN_REC & 0xff;
+                if (face == 0) {
+                    return WORLD_BAD_DATA;
+                }
+                if (face & (face - 1)) {
+                    return WORLD_BAD_DATA;
+                }
+                if ((face & run_faces) == 0) {
+                    return WORLD_BAD_DATA;
+                }
+                const uint8_t len = (v->mat >> 4) + 1;
+                if (len > RUN_MAX) {
+                    return WORLD_BAD_DATA;
+                }
+                uint8_t along = v->xz & 7;          // a z run: along x
+                if (run_faces & (FACE_XP | FACE_XN)) {
+                    along = v->xz >> 3;             // an x run: along z
+                }
+                if (along + len > CHUNK_SIZE) {
+                    return WORLD_BAD_DATA;
+                }
+            } else {
+                if (in_runs) {
+                    return WORLD_BAD_DATA;
+                }
+                if (v->faces > (FACE_XP | FACE_XN | FACE_ZP | FACE_ZN | FACE_TOP | FACE_BOT | FACE_RUN)) {
+                    return WORLD_BAD_DATA;
+                }
+                if (v->mat >= MAT_COUNT) {
+                    return WORLD_BAD_DATA;
+                }
             }
         }
     }
@@ -158,9 +200,10 @@ uint8_t worldStart(void) {
     return 0;
 }
 
-const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count) {
+const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count, uint8_t *runs) {
     // ifs: see the compiler bug in CLAUDE.md
     *count = 0;
+    *runs = WORLD_RUNS_NONE;
     if (cx < 0 || cz < 0) {
         return NULL;
     }
@@ -171,6 +214,7 @@ const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count) {
     const world_chunk_t *c = (const world_chunk_t *)(data + sizeof(world_header_t)) +
                              (cz * world->size_x + cx);
     *count = c->count;
+    *runs = c->runs;
     return (const world_voxel_t *)(data + c->offset);
 }
 

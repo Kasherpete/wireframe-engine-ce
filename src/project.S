@@ -1,7 +1,7 @@
 ; projectRecords: cull and project the scene.
 ;
 ;   uint8_t projectRecords(const int8_t (*rec)[5], uint8_t n, projected_box_t *out, uint8_t room,
-;                          int24_t bias_x, int24_t bias_z)
+;                          int24_t bias_x, int24_t bias_z, uint8_t runs)
 ;
 ; For each record {X, Y, Z, material, exposed faces} of one chunk, in order: the faces facing the
 ; camera (face_x/y/z, by grid index) that are also exposed; none, and the box is skipped. Otherwise
@@ -20,6 +20,15 @@
 ;
 ; Fog: a box whose centre is at least cam_fog deep gets material + MAT_FOGGED (the fogged colours,
 ; colours.c). With fog_dist at or beyond the far plane no box reaches cam_fog.
+;
+; Runs (chunks.h): with runs (the faces this chunk's runs draw, or 0) a voxel with FACE_RUN leaves
+; those faces out, and a run record (.Lrun) becomes BOX_RUN: the points between its faces. Only its
+; cells that pass the culling of a box are kept (they are contiguous: every test is linear along the
+; run), so every point is a corner of a kept box, as the table proof (gen_tables.py) requires. A
+; point behind the near plane is moved along the run to it (exact). Runs stop at the level of detail:
+; beyond it a voxel is one rectangle anyway, with all its faces, which is cheaper than a run's points
+; and edges. Fog is decided per cell as for a box, so a run crossing fog_dist (with the level of
+; detail at or beyond it) is split there into two.
 ;
 ; Why assembly: clang turns every multiply, right shift and even AND into a library call. And the
 ; CE is memory bound: roughly 2 cycles per byte touched, opcode bytes included. So this code
@@ -58,6 +67,9 @@
 
 #if TABLE_CULL_X_NUM != 5 || TABLE_CULL_X_DEN != 4
 #error "the horizontal culling below compares 4 x with 5 z"
+#endif
+#if FACE_RUN != 0x40 || FACE_RUN_REC != 0x80 || RUN_POINTS != 9
+#error "runs: bit tests and the point buffers"
 #endif
 
 #define EXP_BASE	_expTable - 3 * EXP_TABLE_MIN
@@ -100,7 +112,8 @@
 #define V_CAM_LODRECT	80
 #define V_CAM_FOG	83
 #define V_ROOM		86
-#define V_SIZE		87
+#define V_EXPO		87
+#define V_SIZE		88
 
 	.assume	ADL = 1
 
@@ -270,12 +283,100 @@ _projectRecords:
 	ld	(.Lgby + 1), hl
 	ld	hl, (iy + 21)
 	ld	(.Lgbz + 1), hl
+	; runs: on for the faces in runs (a run with another face is skipped), and FACE_RUN voxels drop
+	; them. And the biases for the run path
+	ld	a, (iy + 24)
+	ld	(.Lrun_m + 1), a
+	or	a, a
+	jr	z, .Lruns_off
+	ld	a, 0xfa			; the checks as assembled: jp m, .Lrun
+	ld	(.Lra), a
+	ld	hl, .Lrun
+	ld	(.Lra + 1), hl
+	ld	a, 0xdd			; bit 6, (ix + V_EXPO)
+	ld	(.Lmb), a
+	ld	a, 0xcb
+	ld	(.Lmb + 1), a
+	ld	a, V_EXPO
+	ld	(.Lmb + 2), a
+	ld	a, V_EXPO		; and a, (ix + V_EXPO)
+	ld	(.Lft + 2), a
+	ld	a, 0xdd
+	jr	.Lruns_on
+.Lruns_off:				; jr over them, and the face test on the record
+	ld	hl, .Lra_end
+	ld	de, .Lra + 2
+	or	a, a
+	sbc	hl, de
+	ld	h, l
+	ld	l, 0x18
+	ld	(.Lra), hl		; (the byte after it is never executed)
+	ld	hl, .Lmb_end
+	ld	de, .Lmb + 2
+	or	a, a
+	sbc	hl, de
+	ld	h, l
+	ld	l, 0x18
+	ld	(.Lmb), hl
+	ld	a, 4			; and a, (iy + 4)
+	ld	(.Lft + 2), a
+	ld	a, 0xfd
+.Lruns_on:
+	ld	(.Lft), a
+	ld	a, (iy + 24)
+	cpl
+	and	a, FACE_XP | FACE_XN | FACE_ZP | FACE_ZN | FACE_TOP | FACE_BOT
+	ld	(.Lmm + 1), a
+	ld	(.Lmm0 + 1), a
+	ld	a, (iy + 18)
+	ld	(.Lmbx + 1), a
+	ld	a, (iy + 21)
+	ld	(.Lmbz + 1), a
+	ld	a, (_lod_rect_dist)
+	sub	a, 2
+	jr	nc, 2f
+	xor	a, a
+2:	ld	(.Lmlod + 1), a
+	ld	hl, (iy + 18)
+	ld	(.Lr_bx), hl
+	ld	(.Lrgbx + 1), hl
+	ld	hl, (iy + 21)
+	ld	(.Lr_bz), hl
+	ld	(.Lrgbz + 1), hl
+	ld	hl, (_cam_bias_y)
+	ld	(.Lrgby + 1), hl
 
 .Lrec:
 	ld	iy, (VAR(V_REC))
 	ld	a, (iy + 4)
 	or	a, a
 	jp	z, .Lnext		; enclosed by neighbours: no face can show
+	; with the runs off (none among the records), from here to .Lra_end is skipped: .Lra is
+	; patched to a jr there
+.Lra:	jp	m, .Lrun		; FACE_RUN_REC: a run
+	ld	(VAR(V_EXPO)), a
+	; FACE_RUN, and surely nearer than the level of detail: its nearest corner is at most
+	; |dx| + |dz| + 2 units away (cells from the camera's, gridDist), and a depth is at most a
+	; distance. Then the runs draw those faces (else decided by its depth, below)
+	bit	6, a
+	jr	z, .Lra_end
+	ld	hl, _gridDist
+	ld	a, (iy + 0)
+.Lmbx:	add	a, 0			; + bias_x (patched)
+	ld	l, a
+	ld	c, (hl)
+	ld	a, (iy + 2)
+.Lmbz:	add	a, 0			; + bias_z (patched)
+	ld	l, a
+	ld	a, (hl)
+	add	a, c
+.Lmlod:	cp	a, 0			; patched: lod_rect_dist - 2 (or 0)
+	jr	nc, .Lra_end
+	ld	a, (VAR(V_EXPO))
+.Lmm0:	and	a, 0			; patched: ~runs (clears FACE_RUN too)
+	jp	z, .Lnext
+	ld	(VAR(V_EXPO)), a
+.Lra_end:
 
 	; ---- the rotated x and z grid lines of the box ----
 	GRID_INDEX 2, .Lgbz
@@ -305,6 +406,21 @@ _projectRecords:
 	or	a, a
 	sbc	hl, de			; unsigned: carry if every corner is in depth range
 	jp	nc, .Lskip
+	; FACE_RUN and nearer than the level of detail: runs draw those faces (beyond it the box
+	; becomes a rectangle with all of them, and runs stop there). With the runs off .Lmb is
+	; patched to a jr to .Lmb_end
+.Lmb:	bit	6, (VAR(V_EXPO))
+	jr	z, .Lmb_end
+	ld	hl, (VAR(V_Z00))
+	ld	de, (VAR(V_CAM_LODRECT))
+	or	a, a
+	sbc	hl, de
+	jp	p, .Lmb_end		; a rectangle: all its faces
+	ld	a, (VAR(V_EXPO))
+.Lmm:	and	a, 0			; patched: ~runs (all faces when the runs are off)
+	jp	z, .Lskip
+	ld	(VAR(V_EXPO)), a
+.Lmb_end:
 	ld	hl, (iy + 0)		; XC
 	or	a, a
 	sbc	hl, bc
@@ -382,7 +498,7 @@ _projectRecords:
 	ld	l, a
 	ld	a, (hl)
 	or	a, c
-	and	a, (iy + 4)
+.Lft:	and	a, (VAR(V_EXPO))	; exposed, less runs (bits 6, 7 never face). Runs off: (iy + 4)
 	jp	z, .Lnext
 	ld	(VAR(V_FACES)), a
 
@@ -488,7 +604,7 @@ _projectRecords:
 	ld	(VAR(V_OUT)), iy
 	inc	(VAR(V_KEPT))
 	dec	(VAR(V_ROOM))
-	jp	z, .Lend		; out[] is full
+	jp	z, .Lout_full		; out[] is full
 .Lskip:
 .Lnext:
 	ld	hl, (VAR(V_REC))
@@ -501,6 +617,10 @@ _projectRecords:
 	ld	a, (VAR(V_KEPT))
 	pop	ix
 	ret
+.Lout_full:
+	ld	a, 1
+	ld	(_project_full), a
+	jr	.Lend
 
 	; ==== level of detail: the rectangle of the x and y extent, at the centre depth ====
 .Lrect:
@@ -695,6 +815,718 @@ _projectRecords:
 	ld	a, BOX_GEN
 	jp	.Ldone
 
+	; ==== a run of merged faces (chunks.h): iy -> {X, Y, Z, material + 16 (length - 1),
+	; FACE_RUN_REC + face}, a = its exposed byte. Rare next to boxes (a few dozen a frame), so
+	; plain code with absolute addresses
+.Lrun:
+.Lrun_m:
+	and	a, 0			; patched: runs (0: off)
+	jp	z, .Lnext
+	ld	(VAR(V_FACES)), a
+	; facing the camera: face_x by the low byte of X + bias_x for x faces, face_z for z faces
+	ld	c, a
+	and	a, FACE_XP | FACE_XN
+	jr	z, 1f
+	ld	a, (.Lr_bx)
+	add	a, (iy + 0)
+	ld	hl, _face_x
+	jr	2f
+1:	ld	a, (.Lr_bz)
+	add	a, (iy + 2)
+	ld	hl, _face_z
+2:	ld	l, a
+	ld	a, c
+	and	a, (hl)
+	jp	z, .Lnext		; facing away
+	ld	a, (iy + 3)
+	and	a, 15
+	ld	(.Lr_mat), a
+	ld	a, (iy + 3)
+	rrca
+	rrca
+	rrca
+	rrca
+	and	a, 7
+	inc	a
+	ld	(.Lr_len), a		; cells, 1 .. RUN_MAX (worldOpen checked)
+	GRID_INDEX 1, .Lrgby		; the y of its cells
+	ld	de, _camY_
+	add	hl, de
+	ld	hl, (hl)
+	ld	(VAR(V_YT)), hl
+	ld	a, (VAR(V_FACES))
+	and	a, FACE_XP | FACE_XN
+	jp	z, .Lrun_zf
+	; x faces of the cells (X, Y, Z + i): the x line is fixed, the z line steps. Along the run a
+	; corner moves by (ax, az) = (-sin, cos) in camera space, the face line is X - 1 (-x) or X (+x)
+	GRID_INDEX 0, .Lrgbx
+	add	hl, hl
+	ld	de, _rotX_
+	add	hl, de
+	ld	(.Lr_xp), hl		; {XC, XS} of the low x line
+	ld	hl, (VAR(V_CAM_SIN3))
+	ex	de, hl
+	or	a, a
+	sbc	hl, hl
+	sbc	hl, de
+	ld	(.Lr_ax), hl
+	ld	hl, (VAR(V_CAM_COS3))
+	ld	(.Lr_az), hl
+	ld	hl, (VAR(V_CAM_SIN3))		; +x face: corner 1, + (cos, sin)
+	ld	(.Lr_fz2), hl
+	ld	a, (VAR(V_FACES))
+	cp	a, FACE_XP
+	ld	hl, (VAR(V_CAM_COS3))
+	jr	z, 1f
+	or	a, a
+	sbc	hl, hl
+	ld	(.Lr_fz2), hl		; -x face: the low corner
+1:	ld	(.Lr_fx), hl
+	ld	hl, (.Lr_bz)
+	ld	de, 0
+	ld	e, (iy + 2)
+	add	hl, de
+	ld	(.Lr_n), hl		; grid index of cell 0 along the run (maybe outside the tables)
+	ld	hl, _rotZ_
+	ld	(.Lr_zp), hl		; stepping: rotZ_ + 6 n
+	jp	.Lrun_cells
+.Lrun_zf:
+	; z faces of the cells (X + i, Y, Z): (ax, az) = (cos, sin), the face line Z - 1 or Z
+	GRID_INDEX 2, .Lrgbz
+	add	hl, hl
+	ld	de, _rotZ_
+	add	hl, de
+	ld	(.Lr_xp), hl		; {ZS, ZC} of the low z line (the fixed one)
+	ld	hl, (VAR(V_CAM_COS3))
+	ld	(.Lr_ax), hl
+	ld	(.Lr_fz2), hl		; +z face: corner 2, + (-sin, cos)
+	ld	hl, (VAR(V_CAM_SIN3))
+	ld	(.Lr_az), hl
+	ex	de, hl
+	or	a, a
+	sbc	hl, hl
+	sbc	hl, de
+	ld	a, (VAR(V_FACES))
+	cp	a, FACE_ZP
+	jr	z, 1f
+	or	a, a
+	sbc	hl, hl
+	ld	(.Lr_fz2), hl		; -z face: the low corner
+1:	ld	(.Lr_fx), hl
+	ld	hl, (.Lr_bx)
+	ld	de, 0
+	ld	e, (iy + 0)
+	add	hl, de
+	ld	(.Lr_n), hl
+	ld	hl, _rotX_
+	ld	(.Lr_zp), hl
+
+	; ---- the cells lo .. hi to draw: inside the tables, then (the tests are linear along the run,
+	; so each keeps an interval of cells) passing the culling of a box and nearer than the level of
+	; detail. The camera space of cell lo comes from the tables, the rest by adding (ax, az) ----
+.Lrun_cells:
+	xor	a, a
+	ld	(.Lr_lo), a
+	ld	a, (.Lr_len)
+	dec	a
+	ld	(.Lr_hi), a
+	ld	de, (.Lr_n)
+	ld	hl, 2 * GRID_RANGE - 1
+	or	a, a
+	sbc	hl, de			; the last cell in the tables, from cell 0
+	jp	m, .Lnext
+	ld	bc, 0
+	ld	c, a
+	or	a, a
+	sbc	hl, bc
+	jr	nc, 1f
+	add	hl, bc
+	ld	a, l
+	ld	(.Lr_hi), a
+1:	ld	hl, (.Lr_n)
+	ld	bc, 0
+	or	a, a
+	sbc	hl, bc
+	jp	p, 2f
+	ex	de, hl			; cell 0 is before the tables: lo = -n
+	or	a, a
+	sbc	hl, hl
+	sbc	hl, de
+	ld	a, (.Lr_hi)
+	ld	c, a
+	or	a, a
+	sbc	hl, bc
+	jr	z, 21f
+	jp	nc, .Lnext		; -n > hi: none in the tables
+21:	add	hl, bc
+	ld	a, l
+	ld	(.Lr_lo), a
+	; the table entries of cell lo: n = n0 + lo. The tests below start from it (cell b)
+2:	ld	a, (.Lr_lo)
+	ld	(.Lr_b), a
+	ld	a, (.Lr_hi)
+	ld	(.Lr_bh), a
+	ld	hl, (.Lr_n)
+	ld	de, 0
+	ld	a, (.Lr_lo)
+	ld	e, a
+	add	hl, de
+	push	hl
+	pop	de
+	add	hl, hl
+	add	hl, de
+	add	hl, hl			; 6 n
+	ld	de, (.Lr_zp)
+	add	hl, de			; the stepping entry
+	ld	a, (VAR(V_FACES))
+	and	a, FACE_XP | FACE_XN
+	jr	nz, 3f
+	ex	de, hl			; z run: it is the {XC, XS} one
+	ld	hl, (.Lr_xp)
+	ex	de, hl
+	ld	(.Lr_xp), hl
+	ex	de, hl
+3:	push	hl
+	pop	iy			; -> {ZS, ZC}
+	ld	de, (iy + 0)		; ZS
+	ld	bc, (iy + 3)		; ZC
+	ld	iy, (.Lr_xp)		; -> {XC, XS}
+	ld	hl, (iy + 3)		; XS
+	add	hl, bc
+	ld	(VAR(V_Z00)), hl	; z00 of cell lo
+	ld	hl, (iy + 0)		; XC
+	or	a, a
+	sbc	hl, de
+	ld	(VAR(V_X00)), hl	; x00 of cell lo
+
+	; ---- the four box tests, as functions of the cell that must be >= 0 (linear along the run):
+	;   v0 = z00 + m, m the least of -zlo (the farthest corner not nearer than the near plane),
+	;        kzmax - yt (not below the view) and yt - cyl (not above it)
+	;   v1 = c - z00, c the least of zlo + zspan - 1 (the farthest corner before the far plane)
+	;        and lod_rect - 1 (nearer than the level of detail)
+	;   v2 = cxr + 5 z00 - 4 x00 (not right of the view), v3 = 4 x00 + 5 z00 - cxl (not left)
+	; at cells b and bh (.Lr_vals). Kept at both ends: every cell passes it; failed at both: none
+	; does; else (a run crossing an edge of the view, rare) the cells are stepped (.Lr_test) ----
+	ld	hl, (VAR(V_CAM_ZLO))
+	ex	de, hl
+	or	a, a
+	sbc	hl, hl
+	sbc	hl, de			; -zlo
+	push	hl
+	pop	bc
+	ld	hl, (VAR(V_CAM_KZMAX3))
+	ld	de, (VAR(V_YT))
+	or	a, a
+	sbc	hl, de
+	call	.Lr_min
+	ld	hl, (VAR(V_YT))
+	ld	de, (VAR(V_CAM_CYL))
+	or	a, a
+	sbc	hl, de
+	call	.Lr_min
+	ld	(.Lr_m), bc
+	ld	hl, (VAR(V_CAM_ZLO))
+	ld	de, (VAR(V_CAM_ZSPAN))
+	add	hl, de
+	dec	hl
+	push	hl
+	pop	bc
+	ld	hl, (VAR(V_CAM_LODRECT))
+	dec	hl
+	call	.Lr_min
+	ld	(.Lr_c3), bc
+	; cell bh: cell b + (bh - b) (ax, az)
+	ld	hl, (VAR(V_X00))
+	ld	de, (VAR(V_Z00))
+	ld	a, (.Lr_b)
+	ld	c, a
+	ld	a, (.Lr_bh)
+	sub	a, c
+	jr	z, 2f
+	ld	b, a
+1:	push	bc
+	ld	bc, (.Lr_ax)
+	add	hl, bc
+	ex	de, hl
+	ld	bc, (.Lr_az)
+	add	hl, bc
+	ex	de, hl
+	pop	bc
+	djnz	1b
+2:	ld	(.Lr_ze), de
+	ld	iy, .Lr_ve
+	call	.Lr_vals
+	ld	hl, (VAR(V_X00))
+	ld	de, (VAR(V_Z00))
+	ld	iy, .Lr_vb
+	call	.Lr_vals
+
+	; test k: hl = v at cell b, de = its step
+	.macro	RTEST k
+	ld	a, (.Lr_vb + 3 * \k + 2)
+	ld	c, a
+	ld	a, (.Lr_ve + 3 * \k + 2)
+	and	a, c
+	jp	m, .Lnext		; failed at both ends
+	ld	a, (.Lr_ve + 3 * \k + 2)
+	or	a, c
+	jp	p, 9f			; kept at both
+	call	.Lr_df\k
+	ld	hl, (.Lr_vb + 3 * \k)
+	call	.Lr_test
+	jp	c, .Lnext
+9:
+	.endm
+	RTEST	0
+	RTEST	1
+	RTEST	2
+	RTEST	3
+
+	; camera space of cell lo, from cell b (only when a test moved lo)
+	ld	a, (.Lr_lo)
+	ld	hl, .Lr_b
+	sub	a, (hl)
+	jr	z, 8f
+	ld	b, a
+	ld	hl, (VAR(V_X00))
+	ld	de, (VAR(V_Z00))
+9:	push	bc
+	ld	bc, (.Lr_ax)
+	add	hl, bc
+	ex	de, hl
+	ld	bc, (.Lr_az)
+	add	hl, bc
+	ex	de, hl
+	pop	bc
+	djnz	9b
+	ld	(VAR(V_X00)), hl
+	ld	(VAR(V_Z00)), de
+8:
+	; fog of cell lo (z00 >= cam_fog, as for a box). Cells b and bh alike (the usual case: fog
+	; is beyond the level of detail): all of them. Else k, the first cell of the other fog
+	; (0xff: none), stepping from lo
+	ld	a, 0xff
+	ld	(.Lr_k), a
+	ld	de, (VAR(V_CAM_FOG))
+	ld	hl, (VAR(V_Z00))
+	or	a, a
+	sbc	hl, de			; f(lo)
+	ld	b, 0
+	jp	m, 4f
+	inc	b
+4:	ld	a, b
+	ld	(.Lr_fog), a
+	push	hl
+	ld	hl, (.Lr_ze)
+	or	a, a
+	sbc	hl, de			; f(bh)
+	ld	a, 0
+	jp	m, 41f
+	inc	a
+41:	pop	hl
+	cp	a, b
+	jr	z, 7f			; the same: so are lo .. hi
+	ld	de, (.Lr_az)
+	ld	a, (.Lr_lo)
+	ld	c, a
+5:	ld	a, (.Lr_hi)
+	cp	a, c
+	jr	z, 7f
+	inc	c
+	or	a, a
+	adc	hl, de			; the fog test of cell c
+	ld	a, 0
+	jp	m, 6f
+	inc	a
+6:	ld	b, a
+	ld	a, (.Lr_fog)
+	cp	a, b
+	jr	z, 5b
+	ld	a, c
+	ld	(.Lr_k), a
+7:
+	YLOGS
+
+	; ---- the points lo .. hi + 1 on the face line into .Lpts as {x, z}: the face corner of
+	; cell lo, then + (ax, az) each ----
+	ld	a, (.Lr_hi)
+	ld	hl, .Lr_lo
+	sub	a, (hl)
+	add	a, 2
+	ld	(.Lr_np), a
+	ld	b, a
+	ld	hl, (VAR(V_X00))
+	ld	de, (.Lr_fx)
+	add	hl, de
+	push	hl
+	ld	hl, (VAR(V_Z00))
+	ld	de, (.Lr_fz2)
+	add	hl, de
+	ex	de, hl			; de = z
+	pop	hl			; hl = x
+	ld	iy, .Lpts
+.Lrp:
+	ld	(iy + 0), hl
+	ld	(iy + 3), de
+	lea	iy, iy + 6
+	push	de
+	ld	de, (.Lr_ax)
+	add	hl, de
+	ex	(sp), hl
+	ld	de, (.Lr_az)
+	add	hl, de
+	ex	de, hl
+	pop	hl
+	djnz	.Lrp
+
+	; ---- one piece, or two split at cell k by fog ----
+	xor	a, a
+	ld	(.Lr_s), a
+	ld	a, (.Lr_fog)
+	ld	(.Lr_pf), a
+	ld	a, (.Lr_k)
+	inc	a
+	jr	nz, .Lrun_split
+	ld	a, (.Lr_np)
+	dec	a
+	ld	(.Lr_e), a
+	call	.Lrun_piece
+	jp	c, .Lout_full
+	jp	.Lnext
+.Lrun_split:
+	dec	a
+	ld	hl, .Lr_lo
+	sub	a, (hl)
+	ld	(.Lr_e), a		; points 0 .. k - i0
+	ld	(.Lr_ks), a
+	call	.Lrun_piece
+	jp	c, .Lout_full
+	ld	a, (.Lr_ks)
+	ld	(.Lr_s), a		; then k - i0 .. np - 1, the other fog
+	ld	a, (.Lr_np)
+	dec	a
+	ld	(.Lr_e), a
+	ld	a, (.Lr_pf)
+	xor	a, 1
+	ld	(.Lr_pf), a
+	call	.Lrun_piece
+	jp	c, .Lout_full
+	jp	.Lnext
+
+; bc = min(bc, hl), signed. Clobbers hl
+.Lr_min:
+	or	a, a
+	sbc	hl, bc
+	ret	p
+	add	hl, bc
+	push	hl
+	pop	bc
+	ret
+
+; de = -de. Clobbers nothing else but flags
+.Lr_neg_de:
+	push	hl
+	or	a, a
+	sbc	hl, hl
+	sbc	hl, de
+	ex	de, hl
+	pop	hl
+	ret
+
+; hl = 5 hl - 4 de, or (.Lr_5p4) 5 hl + 4 de. Clobbers de
+.Lr_5m4:
+	call	.Lr_neg_de
+.Lr_5p4:
+	push	hl
+	ex	de, hl
+	add	hl, hl
+	add	hl, hl
+	ex	de, hl			; 4 de
+	add	hl, hl
+	add	hl, hl
+	ex	(sp), hl
+	pop	bc			; bc = 4 hl
+	add	hl, bc			; 5 hl
+	add	hl, de
+	ret
+
+; the four test values (above) of the cell with x00 = hl, z00 = de into iy + 0, 3, 6, 9.
+; Clobbers bc, de, hl
+.Lr_vals:
+	push	hl			; x00
+	ld	hl, (.Lr_m)
+	add	hl, de
+	ld	(iy + 0), hl		; v0 = z00 + m
+	ld	hl, (.Lr_c3)
+	or	a, a
+	sbc	hl, de
+	ld	(iy + 3), hl		; v1 = c - z00
+	push	de
+	pop	hl
+	add	hl, hl
+	add	hl, hl
+	add	hl, de
+	ex	de, hl			; de = 5 z00
+	pop	hl
+	add	hl, hl
+	add	hl, hl			; hl = 4 x00
+	push	hl
+	ex	de, hl
+	push	hl
+	ld	bc, (VAR(V_CAM_CXR))
+	add	hl, bc
+	or	a, a
+	sbc	hl, de
+	ld	(iy + 6), hl		; v2 = cxr + 5 z00 - 4 x00
+	pop	hl
+	add	hl, de
+	ld	de, (VAR(V_CAM_CXL))
+	or	a, a
+	sbc	hl, de
+	ld	(iy + 9), hl		; v3 = 4 x00 + 5 z00 - cxl
+	pop	hl
+	ret
+
+; the step of test k along the run into de. Clobbers bc, hl
+.Lr_df0:
+	ld	de, (.Lr_az)
+	ret
+.Lr_df1:
+	ld	de, (.Lr_az)
+	jp	.Lr_neg_de
+.Lr_df2:
+	ld	hl, (.Lr_az)
+	ld	de, (.Lr_ax)
+	call	.Lr_5m4
+	ex	de, hl
+	ret
+.Lr_df3:
+	ld	hl, (.Lr_az)
+	ld	de, (.Lr_ax)
+	call	.Lr_5p4
+	ex	de, hl
+	ret
+
+; Narrows the cells .Lr_lo .. .Lr_hi to those where a linear test holds: f(b) = hl for cell b =
+; .Lr_b, f(i + 1) = f(i) + de, kept where f >= 0 (stepping through b .. .Lr_bh). Carry: no cell is
+; left. Clobbers a, bc, hl
+.Lr_test:
+	ld	bc, 0
+	or	a, a
+	adc	hl, bc			; the sign of f(b)
+	jp	m, .Lrt_neg
+	ex	de, hl
+	or	a, a
+	adc	hl, bc			; f(b) >= 0: if de >= 0 every cell passes
+	ex	de, hl
+	ret	p			; (no carry)
+	ld	a, (.Lr_b)		; else b .. c, c the last one with f >= 0
+	ld	c, a
+1:	ld	a, (.Lr_bh)
+	cp	a, c
+	ret	z			; (no carry)
+	or	a, a
+	adc	hl, de
+	jp	m, 2f
+	inc	c
+	jr	1b
+2:	ld	a, (.Lr_hi)		; hi = min(hi, c)
+	cp	a, c
+	jr	c, .Lrt_check
+	ld	a, c
+	ld	(.Lr_hi), a
+	jr	.Lrt_check
+.Lrt_neg:
+	ex	de, hl
+	or	a, a
+	adc	hl, bc
+	ex	de, hl
+	jp	m, 4f			; f(b) < 0 and falling: none
+	jr	z, 4f
+	ld	a, (.Lr_b)		; rising: c .. bh, c the first one with f >= 0
+	ld	c, a
+3:	ld	a, (.Lr_bh)
+	cp	a, c
+	jr	z, 4f
+	inc	c
+	or	a, a
+	adc	hl, de
+	jp	m, 3b
+	ld	a, (.Lr_lo)		; lo = max(lo, c)
+	cp	a, c
+	jr	nc, .Lrt_check
+	ld	a, c
+	ld	(.Lr_lo), a
+.Lrt_check:
+	ld	a, (.Lr_hi)		; carry if lo > hi
+	ld	c, a
+	ld	a, (.Lr_lo)
+	cp	a, c
+	jr	z, 5f
+	ccf
+	ret	nc			; lo < hi
+	; lo > hi: carry is set
+4:	scf
+5:	ret
+; One piece: points .Lr_s .. .Lr_e of .Lpts (at least 2), fog .Lr_pf, into the next slot(s) of
+; out[] as BOX_RUN. Points behind the near plane are dropped, the last of them moved along the run
+; to it (.Lclip_x; in place, so a point the pieces share stays on the run). Carry: out[] is full
+; (project_full is then set by the caller)
+.Lrun_piece:
+	; first point behind: scan for the first one in front, move the one before it there (in
+	; place: a point moved along the run stays on it, so the other piece can share it)
+	ld	a, (.Lr_s)
+	ld	h, a
+	ld	l, 6
+	mlt	hl
+	ld	de, .Lpts
+	add	hl, de
+	push	hl
+	call	.Lclip_front
+	pop	iy
+	jp	p, .Lrp_last
+	ld	a, (.Lr_e)
+	ld	hl, .Lr_s
+	sub	a, (hl)
+	ld	b, a			; points after the first
+1:	lea	hl, iy + 6
+	push	hl
+	call	.Lclip_front
+	pop	hl
+	jp	p, 2f
+	lea	iy, iy + 6
+	djnz	1b
+	; all behind: at other yaws nothing of the face shows. Facing N/E/S/W a box drawn so has
+	; its near face moved to the near plane (LOG_ZC), so the run too, as it is (this face is
+	; then a near face: the camera is pressed against it, nearer than the body allows)
+	ld	a, (VAR(V_CAM_CARDINAL))
+	or	a, a
+	jp	nz, .Lrp_proj
+	ret				; (no carry)
+2:	call	.Lclip_x		; iy -> the last one behind, hl -> the first in front
+	ld	(iy + 0), hl
+	ld	hl, 3 * NEAR_PLANE
+	ld	(iy + 3), hl
+	lea	hl, iy + 0
+	ld	de, .Lpts
+	or	a, a
+	sbc	hl, de
+	ld	a, l			; 6 s: s = a / 6, at most 7 steps
+	ld	b, 0
+3:	or	a, a
+	jr	z, 4f
+	sub	a, 6
+	inc	b
+	jr	3b
+4:	ld	a, b
+	ld	(.Lr_s), a
+.Lrp_last:
+	; last point behind: scan back for the last one in front
+	ld	a, (.Lr_e)
+	ld	h, a
+	ld	l, 6
+	mlt	hl
+	ld	de, .Lpts
+	add	hl, de
+	push	hl
+	call	.Lclip_front
+	pop	iy
+	jp	p, .Lrp_proj
+	ld	a, (.Lr_e)
+	ld	b, a
+1:	lea	hl, iy - 6
+	push	hl
+	call	.Lclip_front
+	pop	hl
+	jp	p, 2f
+	lea	iy, iy - 6
+	dec	b
+	jr	1b			; ends: the first point is in front now
+2:	call	.Lclip_x		; iy -> the first one behind from the end, hl -> the last in front
+	ld	(iy + 0), hl
+	ld	hl, 3 * NEAR_PLANE
+	ld	(iy + 3), hl
+	ld	a, b
+	ld	(.Lr_e), a
+
+.Lrp_proj:
+	; P points, 1 or 2 slots
+	ld	a, (.Lr_e)
+	ld	hl, .Lr_s
+	sub	a, (hl)
+	inc	a
+	ld	(.Lr_c), a
+	ld	c, 1
+	cp	a, RUN_SLOT_POINTS + 1
+	jr	c, 1f
+	inc	c
+	cp	a, RUN_SLOT2_POINTS + 1
+	jr	c, 1f
+	inc	c
+1:	ld	a, (VAR(V_ROOM))
+	cp	a, c
+	ret	c			; no room
+	sub	a, c
+	ld	(VAR(V_ROOM)), a
+	ld	a, (VAR(V_KEPT))
+	add	a, c
+	ld	(VAR(V_KEPT)), a
+	ld	iy, (VAR(V_OUT))
+	ld	a, (.Lr_c)
+	add	a, a
+	add	a, a
+	add	a, a
+	add	a, a
+	or	a, (VAR(V_FACES))
+	ld	(iy + PB_FACES), a
+	ld	(iy + PB_KIND), BOX_RUN
+	ld	a, (.Lr_pf)
+	or	a, a
+	ld	a, (.Lr_mat)
+	jr	z, 2f
+	add	a, MAT_FOGGED
+2:	ld	(iy + PB_MAT), a
+	push	bc			; c = slots
+	ld	a, (.Lr_s)
+	ld	h, a
+	ld	l, 6
+	mlt	hl
+	ld	de, .Lpts
+	add	hl, de
+	ld	(.Lr_pp), hl
+	ld	a, (.Lr_c)
+3:	push	af
+	ld	hl, (.Lr_pp)
+	ld	de, (hl)
+	ld	(VAR(V_CX)), de
+	inc	hl
+	inc	hl
+	inc	hl
+	ld	de, (hl)
+	ld	(VAR(V_CZ)), de
+	inc	hl
+	inc	hl
+	inc	hl
+	ld	(.Lr_pp), hl
+	CORNER	0, 1, 2			; x, top, bottom: v[3 k], v[3 k + 1], v[3 k + 2]
+	lea	iy, iy + 9
+	pop	af
+	dec	a
+	jp	nz, 3b
+	pop	bc
+	ld	iy, (VAR(V_OUT))
+	ld	de, PB_SIZE
+4:	add	iy, de
+	dec	c
+	jr	nz, 4b
+	ld	(VAR(V_OUT)), iy
+	ld	a, (VAR(V_ROOM))
+	or	a, a
+	ret	nz			; (no carry)
+	scf				; out[] is full
+	ret
+
+
 ; One corner: iy -> {x, z} of corner k, its result goes to iy + 24. hl -> its neighbour along its
 ; z side, de -> along its x side, c and b = the FACE_* bits of those sides. A corner in front of the
 ; near plane is copied. One behind it is moved to depth NEAR_PLANE along the edge to a neighbour in
@@ -738,9 +1570,15 @@ _projectRecords:
 	jp	p, .Lclip_to
 	ld	hl, (.Lnb_d)
 .Lclip_to:
-	; hl -> corner A in front, iy -> D behind: x = xD + sign(dx) |dx| a / b, z = NEAR_PLANE,
-	; with dx = xA - xD, a = NEAR_PLANE - zD, b = zA - zD (0 < a < b <= SUB: one edge).
-	; |dx| a / b = expTable[log |dx| + log a - log b - log FOCAL_LENGTH], logs x3 as usual
+	call	.Lclip_x
+	ld	(iy + 24), hl
+	ld	hl, 3 * NEAR_PLANE
+	ld	(iy + 27), hl
+	ret
+	; hl -> corner A in front, iy -> D behind: hl = x = xD + sign(dx) |dx| a / b of the point at
+	; z = NEAR_PLANE, with dx = xA - xD, a = NEAR_PLANE - zD, b = zA - zD (0 < a < b <= SUB: one
+	; edge). |dx| a / b = expTable[log |dx| + log a - log b - log FOCAL_LENGTH], logs x3 as usual
+.Lclip_x:
 	push	hl
 	inc	hl
 	inc	hl
@@ -793,9 +1631,6 @@ _projectRecords:
 	sbc	hl, de			; dx <= 0: minus
 3:	ld	de, (iy + 0)
 	add	hl, de
-	ld	(iy + 24), hl
-	ld	hl, 3 * NEAR_PLANE
-	ld	(iy + 27), hl
 	ret
 
 ; sign flag: negative if the corner at hl is behind the near plane. Clobbers de, hl
@@ -852,7 +1687,8 @@ _cam_kxmid3:	.zero	3
 _cam_kzmid3:	.zero	3
 _cam_lod_rect:	.zero	3
 _cam_fog:	.zero	3
-.Lroom:		.zero	1			; boxes out[] still has room for
+.Lroom:		.zero	1			; slots out[] still has room for
+.Lexpo:		.zero	1			; exposed faces of the record, less those in runs
 .Lvars_end:
 	.if	.Lvars_end - .Lvars != V_SIZE || V_SIZE > 128
 	.error	".Lvars does not match V_SIZE, or is too large for (ix + d)"
@@ -944,8 +1780,8 @@ _cam_fog:	.zero	3
 	.if	_cam_lod_rect - .Lvars != V_CAM_LODRECT || _cam_fog - .Lvars != V_CAM_FOG
 	.error	"V_CAM_LODRECT or V_CAM_FOG does not match .Lvars"
 	.endif
-	.if	.Lroom - .Lvars != V_ROOM
-	.error	"V_ROOM does not match .Lvars"
+	.if	.Lroom - .Lvars != V_ROOM || .Lexpo - .Lvars != V_EXPO
+	.error	"V_ROOM or V_EXPO does not match .Lvars"
 	.endif
 
 ; near-plane clipping (.Lgen_clip): the corners {x, z}, then the clipped ones (24 bytes on)
@@ -958,6 +1794,40 @@ _cam_fog:	.zero	3
 .Lclip_p:	.zero	3			; .Lgen_clip: the next clipped corner, corners left
 .Lclip_n:	.zero	1
 
+; runs (.Lrun)
+	.global	_project_full
+_project_full:	.zero	1			; out[] is full (engine.h)
+.Lr_bx:		.zero	3			; bias_x, bias_z
+.Lr_bz:		.zero	3
+.Lr_xp:		.zero	3			; -> the {XC, XS} entry of the fixed line, then of cell lo
+.Lr_zp:		.zero	3			; the stepping table (rotZ_ or rotX_)
+.Lr_ax:		.zero	3			; camera space step along the run (x3)
+.Lr_az:		.zero	3
+.Lr_fx:		.zero	3			; the face corner of a cell from its low corner
+.Lr_fz2:	.zero	3
+.Lr_n:		.zero	3			; grid index of cell 0 along the run
+.Lr_pp:		.zero	3			; the current point
+.Lr_mat:	.zero	1
+.Lr_len:	.zero	1			; cells
+.Lr_lo:		.zero	1			; the first and last cell drawn
+.Lr_hi:		.zero	1
+.Lr_b:		.zero	1			; the first and last cell in the tables
+.Lr_bh:		.zero	1
+.Lr_k:		.zero	1			; the first of them of the other fog (0xff: none)
+.Lr_fog:	.zero	1			; the fog of cell lo
+.Lr_np:		.zero	1			; points in .Lpts
+.Lr_s:		.zero	1			; the piece: first and last point, fog, points
+.Lr_e:		.zero	1
+.Lr_pf:		.zero	1
+.Lr_c:		.zero	1
+.Lr_ks:		.zero	1			; the point the pieces share
+.Lpts:		.zero	6 * RUN_POINTS		; {x, z} of the points of the kept cells
+.Lr_m:		.zero	3			; the constants of tests 0 and 1
+.Lr_c3:		.zero	3
+.Lr_ze:		.zero	3			; z00 of cell bh
+.Lr_vb:		.zero	12			; the test values of cells b and bh
+.Lr_ve:		.zero	12
+
 ; Faces of a box towards the camera by the grid index of each axis (camera.c, cameraInit):
 ; three consecutive pages, so inc h steps from one to the next
 	.balign	1024
@@ -967,6 +1837,8 @@ _face_y:	.zero	256
 _face_z:	.zero	256
 
 	.extern	_cam_bias_y
+	.extern	_lod_rect_dist
+	.extern	_gridDist
 	.extern	_rotX_
 	.extern	_rotZ_
 	.extern	_camY_

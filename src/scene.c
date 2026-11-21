@@ -91,6 +91,9 @@ static void cullChunks(void) {
 }
 
 
+// the faces a chunk's runs draw, by chunk_t.mode (WORLD_RUNS_*)
+static const uint8_t run_faces[3] = {0, FACE_XP | FACE_XN, FACE_ZP | FACE_ZN};
+
 // Chunks nearest first (visit_order), the boxes of each near to far (sortChunk), so projected[] is
 // near to far (chunks.h, painter's order). A box with no face both towards the camera and not
 // covered by a neighbour is skipped before projecting. The per-box loop is in project.S
@@ -101,6 +104,7 @@ void projectScene(void) {
     projected_box_t *out = projected;
     uint24_t room = MAX_PROJECTED;
     uint8_t k = 0;
+    project_full = 0;
     while (k < WINDOW_N) {
         const uint8_t w = visit_order[k++];
         chunk_t *ch = win[w];
@@ -112,13 +116,22 @@ void projectScene(void) {
         }
         sortChunk(ch);
         PROF(const uint24_t tp = CYCLES();)
-        const uint8_t kept = projectRecords(ch->rec, ch->n, out, room > 255 ? 255 : (uint8_t)room,
-                                            cam_bias_x + ch->ox, cam_bias_z + ch->oz);
-        PROF(prof_proj_cycles += CYCLES() - tp; prof_records += ch->n; prof_chunks++;)
+        // without runs drawn only the voxels: the runs are after them (chunks.h)
+        uint8_t n = ch->n;
+        if (ch->mode == WORLD_RUNS_NONE) {
+            n -= ch->nruns;
+        }
+        const uint8_t kept = projectRecords(ch->rec, n, out, room > 255 ? 255 : (uint8_t)room,
+                                            cam_bias_x + ch->ox, cam_bias_z + ch->oz,
+                                            run_faces[ch->mode]);
+        PROF(prof_proj_cycles += CYCLES() - tp; prof_records += n; prof_chunks++;)
         out += kept;
         room -= kept;
         if (room == 0) {
             break;
+        }
+        if (project_full) {
+            break;              // a run did not fit: drawing farther boxes could show them through it
         }
     }
     chunks_done = k;

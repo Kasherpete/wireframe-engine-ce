@@ -23,17 +23,20 @@ uint8_t  visit_order[WINDOW_N];
 // sort.S. gridDist[n] = |d| for d = n - GRID_RANGE as a signed byte: the distance in cells along
 // one axis for the low byte of the grid index n (projectRecords' index: n - GRID_RANGE is the box
 // cell minus the camera's). Exact for |d| <= 127, which covers every record of the window (MAX_DXZ,
-// MAX_DY in chunks.h), so the key of every record is exact, culled or not: sortChunk relies on it.
-// Page-aligned
+// MAX_DY in chunks.h). Page-aligned. (project.S uses it for the level of detail.)
 extern uint8_t gridDist[256];
 
-// sort.S: sorts the n records near to far for camera biases bx, by, bz (the low bytes of the grid
-// index biases), through scratch[n] and keys[n]. n must be 1 .. 255. ~480 cycles per record
-void sortRecords(int8_t (*rec)[5], int8_t (*scratch)[5], uint8_t *keys, uint8_t n,
-                 uint8_t bx, uint8_t by, uint8_t bz);
+// sort.S: sorts the n records near to far by key tab[x + bx] + tab[Y + by] + tab[z + bz] (with run
+// 1 or 2 a run's key is only its x or z term, with 0 it is 255: last; 3: there are no runs), through
+// scratch[n] and keys[n]. tab is 256-aligned. n must be 1 .. 255. ~480 cycles per record
+extern uint8_t sortTab[256];
+void sortRecords(int8_t (*rec)[5], int8_t (*scratch)[5], uint8_t *keys, uint8_t n, const uint8_t *tab,
+                 uint8_t bx, uint8_t by, uint8_t bz, uint8_t run);
 
 static int8_t  sort_scratch[CHUNK_MAX][5];
 static uint8_t sort_key[CHUNK_MAX];
+uint8_t runs_enabled = 1;
+uint8_t run_dist = RUN_DIST;
 
 static void initGridDist(void) {
     uint8_t n = 0;
@@ -57,24 +60,99 @@ static int24_t sortRel(int24_t c, int24_t lo, int24_t hi) {
     return c - lo;
 }
 
+// sort.S: the sort keys of one axis of a chunk with runs: t[i] = |d + i| minus its least over
+// i < len, d the first cell minus the camera cell. Returns the greatest. And t[i] *= s for the
+// CHUNK_SIZE keys of the run axis
+uint8_t sortAxisKeys(uint8_t *t, int8_t d, uint8_t len);
+void sortScaleKeys(uint8_t *t, uint8_t s);
+
+// Cells of a chunk from the camera's on x and z (the larger), 0 when the camera is level with it
+static int24_t chunkGap(const chunk_t *ch) {
+    int24_t g = 0;
+    if (cam_cell_x < ch->ox - 1) {
+        g = ch->ox - 1 - cam_cell_x;
+    } else if (cam_cell_x > ch->ox + CHUNK_SIZE - 2) {
+        g = cam_cell_x - (ch->ox + CHUNK_SIZE - 2);
+    }
+    if (cam_cell_z < ch->oz - 1) {
+        if (ch->oz - 1 - cam_cell_z > g) {
+            g = ch->oz - 1 - cam_cell_z;
+        }
+    } else if (cam_cell_z > ch->oz + CHUNK_SIZE - 2) {
+        if (cam_cell_z - (ch->oz + CHUNK_SIZE - 2) > g) {
+            g = cam_cell_z - (ch->oz + CHUNK_SIZE - 2);
+        }
+    }
+    return g;
+}
+
 // ifs, not a combined 0/1 value: see the compiler bug in CLAUDE.md
 void sortChunk(chunk_t *ch) {
     const int24_t rx = sortRel(cam_cell_x, ch->ox - 1, ch->ox + CHUNK_SIZE - 2);
     const int24_t ry = sortRel(cam_cell_y, ch->ymin - 1, ch->ymax - 1);
     const int24_t rz = sortRel(cam_cell_z, ch->oz - 1, ch->oz + CHUNK_SIZE - 2);
+    // Runs only within run_dist cells (so it changes only with the camera cell). Without runs a
+    // chunk is sorted and drawn exactly as if it had none
+    uint8_t want = WORLD_RUNS_NONE;
+    if (runs_enabled) {
+        if (chunkGap(ch) < run_dist) {
+            want = ch->runs;
+        }
+    }
     if (ch->sorted) {
         if (rx == ch->sort_rx) {
             if (ry == ch->sort_ry) {
                 if (rz == ch->sort_rz) {
-                    return;
+                    if (want == ch->want) {
+                        return;
+                    }
                 }
             }
         }
     }
     PROF(const uint24_t t = CYCLES();)
-    sortRecords(ch->rec, sort_scratch, sort_key, ch->n, (uint8_t)(cam_bias_x + ch->ox),
-                (uint8_t)cam_bias_y, (uint8_t)(cam_bias_z + ch->oz));
+    uint8_t mode = WORLD_RUNS_NONE;
+    if (want != WORLD_RUNS_NONE) {
+        // the key tables (chunks.h): x at sortTab[0 ..], z at [8 ..], Y at [16 ..]. The run axis is
+        // the major one: times one more than the other two can add up to (at most 32, so the keys
+        // stay bytes; a taller chunk is sorted plainly, without its runs). The keys then reach 8
+        // times that, and the sort's prefix pass visits every key up to the greatest
+        const uint8_t sx = sortAxisKeys(sortTab, (int8_t)(ch->ox - 1 - cam_cell_x), CHUNK_SIZE);
+        const uint8_t sz = sortAxisKeys(sortTab + CHUNK_SIZE, (int8_t)(ch->oz - 1 - cam_cell_z), CHUNK_SIZE);
+        const uint8_t sy = sortAxisKeys(sortTab + 2 * CHUNK_SIZE, (int8_t)(ch->ymin - 1 - cam_cell_y),
+                                    (uint8_t)(ch->ymax - ch->ymin + 1));
+        _Static_assert(2 * CHUNK_SIZE + WORLD_Y_MAX - WORLD_Y_MIN + 1 <= 256, "sortTab layout");
+        if (want == WORLD_RUNS_X) {
+            if (sy + sz < 32) {
+                mode = WORLD_RUNS_X;
+                sortScaleKeys(sortTab, (uint8_t)(sy + sz + 1));
+            }
+        } else {
+            if (sy + sx < 32) {
+                mode = WORLD_RUNS_Z;
+                sortScaleKeys(sortTab + CHUNK_SIZE, (uint8_t)(sy + sx + 1));
+            }
+        }
+    }
+    if (mode != WORLD_RUNS_NONE) {
+        sortRecords(ch->rec, sort_scratch, sort_key, ch->n, sortTab, 0,
+                    (uint8_t)(2 * CHUNK_SIZE - ch->ymin), CHUNK_SIZE, mode);
+        ch->mixed = 1;
+    } else {
+        // plainly: Manhattan distances straight from gridDist, as without runs. The runs last
+        // (key 255): only the voxels when they are there already
+        uint8_t n = ch->n, run = 0;
+        if (!ch->mixed) {
+            n -= ch->nruns;
+            run = 3;                // no runs among them
+        }
+        sortRecords(ch->rec, sort_scratch, sort_key, n, gridDist, (uint8_t)(cam_bias_x + ch->ox),
+                    (uint8_t)cam_bias_y, (uint8_t)(cam_bias_z + ch->oz), run);
+        ch->mixed = 0;
+    }
     PROF(prof_sort_cycles += CYCLES() - t; prof_sorts++;)
+    ch->mode = mode;
+    ch->want = want;
     ch->sort_rx = rx;
     ch->sort_ry = ry;
     ch->sort_rz = rz;
@@ -84,21 +162,29 @@ void sortChunk(chunk_t *ch) {
 
 // ---- loading ----
 
-// chunk.S: the n file voxels as records {x, y + 1, z, material, faces}, and the least and greatest
+// chunk.S: the n file records as records {x, y + 1, z, material, faces}, and the least and greatest
 // record Y in yrange[0] and [1]
 void copyVoxels(int8_t (*rec)[5], const world_voxel_t *v, uint8_t n, int8_t *yrange);
 
 // Copies chunk (cx, cz) from the world file into ch (an empty chunk outside the world)
 static void loadChunk(chunk_t *ch, int24_t cx, int24_t cz) {
-    uint8_t n;
-    const world_voxel_t *v = worldChunk(cx, cz, &n);
+    uint8_t n, runs;
+    const world_voxel_t *v = worldChunk(cx, cz, &n, &runs);
     ch->cx = cx;
     ch->cz = cz;
     ch->ox = cx * CHUNK_SIZE + 1;
     ch->oz = cz * CHUNK_SIZE + 1;
     ch->n = n;
+    ch->runs = runs;
     ch->sorted = 0;
     copyVoxels(ch->rec, v, n, &ch->ymin);
+    // the runs: the file has them after the voxels (worldOpen checked)
+    uint8_t r = 0;
+    while (r < n && (v[n - 1 - r].faces & FACE_RUN_REC)) {
+        r++;
+    }
+    ch->nruns = r;
+    ch->mixed = 0;
 }
 
 
@@ -140,7 +226,7 @@ static void initOccupancy(void) {
 // occMark sets the cell of each record to 1.
 // occNeighbour marks the records of a neighbour chunk whose coordinate axis (0: x, 2: z) is edge
 // and whose layer is 1 .. ylen, at offset `at` (x = -1 or CHUNK_SIZE; for z, that times OCC_ROW).
-// occExpose stores the FACE_* bits of each record's empty neighbour cells in rec[i][4].
+// occExpose stores the FACE_* bits of each voxel's empty neighbour cells in rec[i][4] (runs as they are).
 void occMark(const int8_t (*rec)[5], uint8_t n, uint8_t ybase);
 void occNeighbour(const int8_t (*rec)[5], uint8_t n, uint8_t axis, uint8_t edge, int24_t at,
                   uint8_t ybase, uint8_t ylen);
@@ -171,6 +257,14 @@ void computeExposure(uint8_t w) {
     memset(solid, 1, (size_t)(end - solid));
 
     const uint8_t ylen = (uint8_t)(ymax - ymin + 1);
+
+    // runs off: a run with no face draws nothing (and its voxels lose FACE_RUN below). A run's cell
+    // is one of its voxels, so marking it as occupied changes nothing
+    for (uint8_t i = 0; i < ch->n; i++) {
+        if (ch->rec[i][4] & FACE_RUN_REC) {
+            ch->rec[i][4] = (int8_t)FACE_RUN_REC;
+        }
+    }
 
     occMark(ch->rec, ch->n, ybase);
     const uint8_t wx = w % WINDOW;

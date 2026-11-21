@@ -39,6 +39,12 @@
 ; of its x and its y. .Lfaces_gen holds them for the GEN layout (fixed); for the AXIS layout they
 ; depend on the direction faced, so fillScene builds .Lfaces_axis per frame from cam_axis_corner.
 ;
+; ---- A run (BOX_RUN, chunks.h) ----
+; One face of P points (x, top y, bottom y each, copied to the start of .Lpage): a polygon of 2 P
+; vertices, the top ones then the bottom ones back, clockwise (.Lrun_faces). Its top and bottom
+; edges pass through every point, so they are the edges the unit faces next to it use (.Lface_run
+; is .Lface with loops over the vertices). A run of more than 4 (8) points takes 2 (3) slots.
+;
 ; ---- Per face (.Lface) ----
 ; 1. The top vertex t and the bottom one b (first on ties).
 ; 2. Rows [top y, bottom y), clipped to the viewport and trimmed to rows still open.
@@ -106,9 +112,10 @@
 #if VIEW_X0 != 0
 #error "subtract VIEW_X0 from the vertex x (fill_ref.c does)"
 #endif
-#if BOX_OUT_LEN != 12 || BOX_AXIS != 1 || BOX_GEN != 2 || BOX_RECT != 3
+#if BOX_OUT_LEN != 12 || BOX_AXIS != 1 || BOX_GEN != 2 || BOX_RECT != 3 || BOX_RUN != 4
 #error "box layout"
 #endif
+
 
 #define B_N		0
 #define B_XL		1
@@ -130,7 +137,7 @@
 #define P_BOX		0		/* the box coordinates v[] (36 bytes): vertex x and y are offsets here */
 #define P_XA		40		/* .Lfaces_axis: offset of the x of corner k (4) */
 #define P_YA		44		/* ... of the y of vertex v (8) */
-#define P_MAT		64		/* material colours: top, x side, z side, bottom */
+#define P_MAT		84		/* material colours: top, x side, z side, bottom (after a run's 81 bytes) */
 #define L_YMIN		128		/* the face: top and bottom y */
 #define L_YMAX		131
 #define L_T		134		/* 2 t: the top vertex, an offset into the face entry */
@@ -158,8 +165,15 @@
 #define L_RXL		179
 #define L_RXR		180
 #define L_OUTP		181		/* edge: block of its first row + slot */
+#define L_V2		184		/* 2 V: the face entry offset of the copy of a vertex (V vertices) */
+#define L_NP		185		/* run: points */
+#define L_CNT		186		/* run: vertices left to look at */
+#define L_I		187		/* run: entry offset of the vertex looked at */
 #define P_LOD		192		/* lod_slot[64], written by sceneInit (scene.c) */
 #define V(o)		ix + o - 128
+#if RUN_POINTS != 9 || RUN_SLOT_POINTS != 4 || RUN_SLOT2_POINTS != 8 || 9 * RUN_POINTS > P_MAT
+#error "run layout: 9 bytes per point at the start of .Lpage, up to 3 slots"
+#endif
 
 #define VIEW_W		VIEW_X1 - VIEW_X0	/* no parentheses: see CLAUDE.md. Mind the precedence */
 #define BG_REM		(VIEW_X1 - VIEW_X0) % 3	/* only in .rept or after another term */
@@ -329,6 +343,8 @@ _fillScene:
 	ld	a, (iy + PB_KIND)
 	cp	a, BOX_RECT
 	jp	z, .Lrect
+	jp	nc, .Lrun_box
+	ld	(V(L_V2)), 2 * 4	; 4 vertices
 	ld	de, (hl)		; top, x side, z side
 	ld	(V(P_MAT)), de
 	inc	hl
@@ -412,6 +428,86 @@ _fillScene:
 	jp	.Lrows_setup
 
 
+; ---- a run of merged faces: iy -> box (faces = face + 16 P), hl -> materials[mat]
+.Lrun_box:
+	ld	a, (V(L_FACES))
+	and	a, FACE_ZP | FACE_ZN
+	jr	z, 1f
+	inc	hl			; z side
+1:	inc	hl			; x side
+	ld	a, (hl)
+	push	af
+	ld	a, (V(L_FACES))
+	rrca
+	rrca
+	rrca
+	rrca
+	and	a, 15
+	ld	(V(L_NP)), a
+	add	a, a
+	add	a, a
+	ld	(V(L_V2)), a		; 2 P vertices
+	; the points (9 bytes each), and whether an x is outside 0 .. 255 (its bytes 1 and 2 not 0)
+	ld	a, (V(L_NP))
+	ld	h, a
+	ld	l, 9
+	mlt	hl
+	push	hl
+	pop	bc
+	lea	hl, iy + PB_V
+	ld	de, .Lpage + P_BOX
+	ldir
+	ld	b, (V(L_NP))
+	ld	hl, .Lpage + P_BOX + 1
+	ld	de, 8
+	xor	a, a
+2:	or	a, (hl)
+	inc	hl
+	or	a, (hl)
+	add	hl, de
+	djnz	2b
+	ld	(V(L_CLAMP)), a
+	; the face entry: .Lrun_faces + 8 .Lrun_off[2 (P - 2) + dir], dir 1 for the faces whose
+	; clockwise order runs against the points (-x, +z)
+	ld	a, (V(L_NP))
+	sub	a, 2
+	add	a, a
+	ld	c, a
+	ld	a, (V(L_FACES))
+	and	a, FACE_XN | FACE_ZP
+	jr	z, 3f
+	inc	c
+3:	ld	hl, .Lrun_off
+	ld	de, 0
+	ld	e, c
+	add	hl, de
+	ld	h, (hl)
+	ld	l, 8
+	mlt	hl
+	ld	de, .Lrun_faces
+	add	hl, de
+	push	hl
+	pop	iy
+	pop	af
+	call	.Lface_run
+	; more than RUN_SLOT_POINTS (RUN_SLOT2_POINTS) points: the next slot (2) hold the rest
+	ld	a, (V(L_NP))
+	cp	a, RUN_SLOT_POINTS + 1
+	ret	c
+	call	1f
+	ld	a, (V(L_NP))
+	cp	a, RUN_SLOT2_POINTS + 1
+	ret	c
+1:	ld	hl, (.Lboxp)
+	ld	de, PB_SIZE
+	add	hl, de
+	ld	(.Lboxp), hl
+	ld	hl, (.Lnbox)		; at least 1: the slot is there
+	dec	hl
+	ld	(.Lnbox), hl
+	ret
+
+
 ; ---- a = the colour: into the row loop, and 3 times for long spans
 .Lcolour:
 	ld	(.Lsm_col + 1), a
@@ -419,6 +515,80 @@ _fillScene:
 	ld	(V(L_COL3 + 1)), a
 	ld	(V(L_COL3 + 2)), a
 	ret
+
+
+; ---- .Lface for a run: iy -> its face entry (L_V2 / 2 vertices), a = colour. The same with loops:
+; t and b (the first on ties), then the x extent of its L_NP points
+.Lface_run:
+	call	.Lcolour
+	ld	(V(L_FACE)), iy
+	xor	a, a
+	ld	(V(L_T)), a
+	ld	(V(L_B)), a
+	ld	(V(L_RECT)), a
+	ld	hl, .Lpage
+	ld	l, (iy + 1)
+	ld	de, (hl)		; ymin
+	push	de
+	pop	bc			; ymax
+	ld	a, (V(L_V2))
+	rrca
+	dec	a
+	ld	(V(L_CNT)), a		; vertices after the first: 2 P - 1 (L_V2 = 4 P)
+	ld	(V(L_I)), 0
+1:	lea	iy, iy + 2
+	ld	a, (V(L_I))
+	add	a, 2
+	ld	(V(L_I)), a
+	ld	hl, .Lpage
+	ld	l, (iy + 1)
+	ld	hl, (hl)
+	or	a, a
+	sbc	hl, de			; y - ymin
+	jp	p, 2f
+	add	hl, de
+	ex	de, hl			; a new top
+	ld	(V(L_T)), a
+	jr	3f
+2:	add	hl, de
+	or	a, a
+	sbc	hl, bc			; y - ymax
+	jr	z, 3f
+	jp	m, 3f
+	add	hl, bc			; a new bottom
+	push	hl
+	pop	bc
+	ld	(V(L_B)), a
+3:	dec	(V(L_CNT))
+	jr	nz, 1b
+	ld	(V(L_YMIN)), de
+	ld	(V(L_YMAX)), bc
+	; x extent: the x of each point (top and bottom vertices share it)
+	ld	iy, .Lpage + P_BOX
+	ld	de, (iy + 0)
+	push	de
+	pop	bc
+	ld	a, (V(L_NP))
+	dec	a
+	ld	(V(L_CNT)), a
+4:	lea	iy, iy + 9
+	ld	hl, (iy + 0)
+	or	a, a
+	sbc	hl, de			; x - xmin
+	jp	p, 5f
+	add	hl, de
+	ex	de, hl			; a new least
+	jr	6f
+5:	add	hl, de
+	or	a, a
+	sbc	hl, bc			; x - xmax
+	jp	m, 6f
+	add	hl, bc
+	push	hl
+	pop	bc			; a new greatest
+6:	dec	(V(L_CNT))
+	jr	nz, 4b
+	jp	.Lface_x
 
 
 ; ==================================================================================================
@@ -495,6 +665,7 @@ _fillScene:
 	XMINMAX	1
 	XMINMAX	2
 	XMINMAX	3
+.Lface_x:				; de = least x, bc = greatest
 	ex	de, hl
 	CLAMP8
 	ld	(V(L_RXL)), a
@@ -648,7 +819,7 @@ _fillScene:
 	ld	(V(L_RC)), hl
 	ld	iy, (V(L_FACE))
 	ld	a, (V(L_T))
-	add	a, 8
+	add	a, (V(L_V2))		; the copy of t, V entries on
 	ld	de, 0
 	ld	e, a
 	add	iy, de
@@ -1370,6 +1541,26 @@ _deinterlaceFrame:
 
 ; ==================================================================================================
 	.section	.rodata._fillScene,"a",@progbits
+; a long span of len pixels: the stub for len % 3 (draw page entry 4, 8, 12), and on the next
+; page the push entry for len / 3
+	.balign	512			; so inc h never wraps
+.Llong_tab:
+	.set	i, 0
+	.rept	256
+	.byte	4 + 4 * (i - 3 * (i / 3))
+	.set	i, i + 1
+	.endr
+	.set	i, 0
+	.rept	256
+	.if	i / 3 <= PUSH_MAX
+	.byte	PUSH_MAX - i / 3
+	.else
+	.byte	0
+	.endif
+	.set	i, i + 1
+	.endr
+
+
 ; per face in FACE_* bit order (+x -x +z -z top bottom): its 4 vertices in clockwise screen order
 ; (v = corner k at the top, k + 4 at the bottom), twice over
 	.macro	FACE_V a, b, c, d
@@ -1406,25 +1597,48 @@ _deinterlaceFrame:
 	FACE_GEN 2, 3, 1, 0
 	FACE_GEN 4, 5, 7, 6
 
-; a long span of len pixels: the stub for len % 3 (draw page entry 4, 8, 12), and on the next
-; page the push entry for len / 3
-	.balign	512			; so inc h never wraps
-.Llong_tab:
-	.set	i, 0
-	.rept	256
-	.byte	4 + 4 * (i - 3 * (i / 3))
-	.set	i, i + 1
-	.endr
-	.set	i, 0
-	.rept	256
-	.if	i / 3 <= PUSH_MAX
-	.byte	PUSH_MAX - i / 3
+; the face entries of runs, as above: for P = 2 .. RUN_POINTS points, the 2 P vertices with the
+; points in order (+x, -z faces) and against it (-x, +z), twice over. Point j is x at 9 j, top y
+; at 9 j + 3, bottom y at 9 j + 6. .Lrun_off[2 (P - 2) + dir]: the offset of each, in 8 bytes
+	.macro	RUN_V j, y
+	.byte	9 * (\j), 9 * (\j) + \y
+	.endm
+	.macro	RUN_FACE p, dir
+	.rept	2
+	.set	j, 0
+	.rept	\p
+	.if	\dir
+	RUN_V	\p - 1 - j, 3
 	.else
-	.byte	0
+	RUN_V	j, 3
 	.endif
-	.set	i, i + 1
+	.set	j, j + 1
 	.endr
-
+	.set	j, 0
+	.rept	\p
+	.if	\dir
+	RUN_V	j, 6
+	.else
+	RUN_V	\p - 1 - j, 6
+	.endif
+	.set	j, j + 1
+	.endr
+	.endr
+	.endm
+.Lrun_faces:
+	.irp	p, 2, 3, 4, 5, 6, 7, 8, 9
+	RUN_FACE \p, 0
+	RUN_FACE \p, 1
+	.endr
+.Lrun_off:
+	.set	o, 0
+	.irp	p, 2, 3, 4, 5, 6, 7, 8, 9
+	.byte	o, o + \p
+	.set	o, o + 2 * \p
+	.endr
+	.if	RUN_POINTS != 9
+	.error	"the .irp lists above"
+	.endif
 
 ; ==================================================================================================
 	.section	.bss._fillScene,"aw",@nobits

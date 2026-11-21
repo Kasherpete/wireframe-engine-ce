@@ -34,7 +34,15 @@
 #define BOX_AXIS          1   // facing N/E/S/W: the near and far faces are rectangles
 #define BOX_GEN           2   // any other yaw
 #define BOX_RECT          3   // level of detail: far enough to be one rectangle, out = l r t b
+#define BOX_RUN           4   // a run of merged faces (chunks.h): P points, see below
 #define BOX_OUT_LEN       12
+// BOX_RUN: faces = the face (FACE_*) + 16 P, and P = 2 .. RUN_POINTS points along the run, each
+// x, top y, bottom y (the vertical edges between its faces, at the ends clipped to the near plane).
+// 3 P values from v[0] on: with more than RUN_SLOT_POINTS they run on over the next slot (its kind
+// byte included), with more than RUN_SLOT2_POINTS over the one after it: 1, 2 or 3 slots of out[]
+#define RUN_POINTS        9
+#define RUN_SLOT_POINTS   4   // points that fit one slot
+#define RUN_SLOT2_POINTS  8   // ... two
 
 // ---- filled rendering (fill.S) ----
 // Faces of a box (corner k as in the GEN layout above). projectScene keeps those that face the
@@ -46,6 +54,10 @@
 #define FACE_ZN      0x08  // -z face, corners 0 and 1
 #define FACE_TOP     0x10  // the box is below the camera (y grows downward)
 #define FACE_BOT     0x20  // the box is above the camera
+// in the exposed byte of a record (chunks.h, runs). A voxel: FACE_RUN means every exposed face of
+// its chunk's run orientation is drawn by a run. A run: FACE_RUN_REC + its face
+#define FACE_RUN     0x40
+#define FACE_RUN_REC 0x80
 
 // A projected box, as projectScene() stores it for the fill rasterizer: kind (BOX_*, never
 // BOX_SKIP), faces to draw (FACE_*), material (index into materials[]), then out[BOX_OUT_LEN]
@@ -77,6 +89,12 @@
 // instead of 12 projections and up to 3 faces. A box spans about 64 / depth pixels, so at 12 units
 // it is a 5 pixel rectangle. Lower is faster and blockier; at or beyond the far plane it is off.
 #define LOD_RECT_DIST   12
+
+// ---- runs (chunks.h; the default of run_dist, chunks.c) ----
+// A chunk draws its runs when it is fewer than RUN_DIST cells from the camera's on x and z (and
+// they stop at the level of detail): farther, its faces are small, and a run costs about what it
+// saves. 0 turns runs off
+#define RUN_DIST        8
 
 // ---- distance fog (the default of fog_dist, camera.c) ----
 // Boxes whose centre is at least FOG_DIST deep use the fogged half of materials[] (material + 16:
@@ -132,11 +150,15 @@ typedef struct {
 
 // project.S: for each of the n records {X, Y, Z, material, exposed FACE_*} of a chunk: the faces
 // facing the camera and exposed; if any, culls the voxel and projects it into the next slot of
-// out[], until room boxes are kept. The grid index of a record is X + bias_x, Y + cam_bias_y,
-// Z + bias_z. Returns how many boxes it kept, in record order (0 if n or room is 0)
+// out[], until room slots are used. The grid index of a record is X + bias_x, Y + cam_bias_y,
+// Z + bias_z. runs: the faces the chunk's runs draw (FACE_XP | FACE_XN or FACE_ZP | FACE_ZN), or 0:
+// its runs are skipped and its voxels draw all their faces (chunks.h, runs). Returns how many slots
+// it used, in record order (0 if n or room is 0); project_full is set when out[] is full (a run may
+// leave a slot unused)
 extern uint8_t face_x[256], face_y[256], face_z[256];  // FACE_* towards the camera, by grid index
+extern uint8_t project_full;
 uint8_t projectRecords(const int8_t (*rec)[5], uint8_t n, projected_box_t *out, uint8_t room,
-                       int24_t bias_x, int24_t bias_z);
+                       int24_t bias_x, int24_t bias_z, uint8_t runs);
 
 // {top, x side, z side, bottom} colour bytes per material, then the same fogged (colours.c)
 extern const uint8_t materials[2 * MAT_COUNT][4];

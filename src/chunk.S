@@ -6,7 +6,7 @@
 ;                     uint8_t ybase, uint8_t ylen)
 ;   void occExpose(int8_t (*rec)[5], uint8_t n, uint8_t ybase)
 ;
-; copyVoxels turns n file voxels {x + 8 z, y, material, faces} (world.h) into records {x, Y = y + 1,
+; copyVoxels turns n file records {x + 8 z, y, material, faces} (world.h) into records {x, Y = y + 1,
 ; z, material, faces}, and stores the least and greatest Y in yrange[0] and [1] (127 and -128 for
 ; n = 0).
 ;
@@ -21,7 +21,8 @@
 ; coordinate axis (0: x, 2: z) is edge, and whose layer is 1 .. ylen (the chunk own layers), at
 ; occ_layer[L] + at + their other coordinate (at = -1 or CHUNK_SIZE on the x axis; on the z axis
 ; that times OCC_ROW).
-; occExpose stores in each record [4] the FACE_* bits of the neighbouring cells that are 0.
+; occExpose stores in each voxel record [4] the FACE_* bits of the neighbouring cells that are 0
+; (and leaves runs, FACE_RUN_REC, as they are).
 ; All do nothing for n = 0.
 ;
 ; In C these were about 500 (copy) and 1.5k (mark and expose) cycles per voxel, and 80 per
@@ -34,6 +35,9 @@
 
 #if OCC_ROW != 10 || OCC_LAYER != 100
 #error "occExpose reads the neighbours as (ix + d): OCC_LAYER must stay under 128"
+#endif
+#if FACE_RUN_REC != 0x80
+#error "occExpose tests bit 7"
 #endif
 #if FACE_XP != 1 || FACE_XN != 2 || FACE_ZP != 4 || FACE_ZN != 8 || FACE_TOP != 16 || FACE_BOT != 32
 #error "occExpose builds the FACE_* bits by shifting"
@@ -239,6 +243,8 @@ _occExpose:
 	ret	z
 	push	ix
 .Lexpose:
+	bit	7, (iy + 4)		; FACE_RUN_REC: a run
+	jr	nz, .Lexpose_next
 	CELL	.Leyb
 	push	hl
 	pop	ix
@@ -257,6 +263,7 @@ _occExpose:
 	cpl
 	and	a, FACE_XP | FACE_XN | FACE_ZP | FACE_ZN | FACE_TOP | FACE_BOT
 	ld	(iy + 4), a
+.Lexpose_next:
 	lea	iy, iy + 5
 	djnz	.Lexpose
 	pop	ix

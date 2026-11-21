@@ -28,11 +28,44 @@
 // also an exact order. If A hides B, A's chunk distance is at most B's, and if they are equal then
 // on every axis A's chunk equals B's, so they are in the same chunk and the sort puts A first.
 //
+// Within a chunk any order works that puts A before B whenever A hides part of B. The sort key of
+// a record is a sum of one table entry per axis (sortChunk): a_x(|dx|) + a_y(|dy|) + a_z(|dz|), each
+// entry |d| minus its least value in the chunk, so each is strictly increasing in |d| and the
+// argument above holds for any such sum.
+//
 // The order of a chunk only depends on which cell the camera is in. On an axis where the camera is
-// outside the chunk's range of cells, moving the camera changes every key of the chunk by the same
-// amount, which leaves the order as it is. So a chunk is only re-sorted (sortChunk) when the camera
+// outside the chunk's range of cells, moving the camera changes every |d| of the chunk by the same
+// amount, which leaves the keys as they are. So a chunk is only re-sorted (sortChunk) when the camera
 // moved into another cell on an axis where it is inside the chunk's range, and only when the chunk
 // is about to be drawn.
+//
+// ---- runs: merged faces ----
+// Big flat objects are slow drawn as unit faces: fill.S pays per face and per row of each face, so
+// a wall of 7 faces side by side costs 7 times the rows of one. The world file therefore merges, per
+// chunk, the coplanar exposed side faces of one orientation (x faces, or z faces: make_world.py picks
+// the one that saves more) into runs: a record that stands for up to RUN_MAX faces of one material in
+// a horizontal row, one cell tall. Its voxels have FACE_RUN, and leave those faces to it.
+//
+// A run's faces lie at many Manhattan distances, so no place in the plain order is right for it (a
+// pillar in front of the far end of a long wall is farther than its near end). The chunk is then
+// sorted along its run axis first: for x runs the key is S |dx| + |dy| + |dz| (each relative to its
+// least in the chunk, and S one more than the greatest |dy| + |dz|, so this is exactly that order;
+// S must stay at most 32 for byte keys, a chunk too tall for that is sorted plainly and its runs are
+// off), and a run of x faces in the slab |dx| = k gets the key S k, the start of its slab. That is exact: whatever hides part of the run lies between the camera and the slab, at a
+// smaller |dx|, and whatever the run hides lies beyond the slab, at a larger |dx|, or in the slab with
+// a larger |dy| + |dz| than the face it lies behind. Boxes on the other side of the camera with the
+// same |dx| cannot overlap it. z runs likewise with |dz|. Between chunks nothing changes: a run stays
+// inside its chunk.
+//
+// A chunk without runs drawn (farther than the level of detail, or too tall) keeps its runs after its
+// voxels (they come so in the file, and a plain sort moves them there with key 255), and sorts and
+// projects only its voxels: then its runs cost nothing.
+//
+// A run is drawn as one polygon whose top and bottom edges pass through every grid point between its
+// faces (fill.S), so its edges are the very edges the faces next to it use, and it meets them
+// without cracks. Runs stop at the level of detail distance (project.S): beyond it a voxel is one
+// rectangle with all its faces, cheaper than a run there. projectRecords keeps only the cells of a run that would pass the culling of a box,
+// so the projection tables cover it as they cover boxes (gen_tables.py).
 #ifndef CHUNKS_H
 #define CHUNKS_H
 
@@ -62,14 +95,20 @@ typedef struct {
     int24_t ox, oz;                  // 8 cx + 1, 8 cz + 1: + cam_bias_x/z is the bias of its records
     uint8_t n;                       // voxels
     int8_t  ymin, ymax;              // range of the records' Y (n > 0). Adjacent: copyVoxels
+    uint8_t nruns;                   // runs among the n records
     uint8_t sorted;                  // the order is the one for sort_rx/ry/rz (sortChunk)
     int24_t sort_rx, sort_ry, sort_rz;
-    int8_t  rec[CHUNK_MAX][5];       // {x, Y, z, material, exposed FACE_*}
+    uint8_t runs;                    // WORLD_RUNS_*: the orientation of its runs (world.h)
+    uint8_t want;                    // runs when it was sorted (within the level of detail distance)
+    uint8_t mixed;                   // the runs are not all after the voxels (sorted with runs)
+    uint8_t mode;                    // the order it is sorted in: runs, or WORLD_RUNS_NONE (plain,
+                                     // runs off: farther, too tall, or runs_enabled is 0)
+    int8_t  rec[CHUNK_MAX][5];       // {x, Y, z, material, exposed FACE_*}, or runs (above)
 } chunk_t;
 
 #define CHUNKS_BSS     24                       // chunk slots in bss
 #ifdef FILL_REFERENCE
-#define CHUNKS_VRAM    0                        // the bench's fill_ref.c keeps its lists there
+#define CHUNKS_VRAM    4                        // the bench's fill_ref.c keeps its lists after them
 #else
 #define CHUNKS_VRAM    14                       // chunk slots in DBL_BUF2 from DBL_BUF2_FREE
 #endif
@@ -79,6 +118,12 @@ typedef struct {
 extern chunk_t *win[WINDOW_N];         // the chunk at window position (dz + 3) * 7 + (dx + 3)
 extern int24_t  win_cx, win_cz;        // the chunk the window is centred on
 extern uint8_t  visit_order[WINDOW_N]; // window positions by distance from the centre, nearest first
+// 0 draws every chunk without its runs (sorted plainly, voxels drawing all their faces). Clear every
+// chunk_t.sorted after changing it
+extern uint8_t  runs_enabled;
+// chunks fewer than this many cells from the camera's draw their runs (RUN_DIST). Clear every
+// chunk_t.sorted after changing it
+extern uint8_t  run_dist;
 
 // Creates the scratch AppVar for the chunk slots that are not in bss. Before worldStart (so the world
 // does not move after it is opened) and before graphx starts: on failure (not enough free RAM) it
@@ -103,7 +148,8 @@ chunk_t *windowChunk(int24_t cx, int24_t cz);
 // for it. ch->n must be at least 1
 void sortChunk(chunk_t *ch);
 
-// Recomputes the exposed faces of the chunk at window position w. For runtime world changes: after
+// Recomputes the exposed faces of the chunk at window position w, and turns its runs off (they would
+// not match a changed chunk; its voxels draw all their faces again). For runtime world changes: after
 // changing its records (clear chunk_t.sorted, update ymin/ymax), call it for w and its 4
 // neighbours, then collideInvalidate()
 void computeExposure(uint8_t w);
