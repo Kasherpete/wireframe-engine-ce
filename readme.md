@@ -147,6 +147,8 @@ compiler path to `CEdev/bin/ez80-clang` and the include path to `CEdev/include` 
 
 ## Changelog
 
+***v1.2.1*** - Memory and performance optimizations
+
 ***v1.2.0*** - Merged faces: walls and the sides of steps are drawn as runs of up to 8 faces
 (world format 3). About 4-6% faster up close and walking, the same at a distance.
 
