@@ -31,8 +31,9 @@ int main(void) {
         kb_Scan();
     }
 
-    // the chunk memory (a scratch AppVar: created before the world is opened, as creating a
-    // variable may move it), then the world file. On an error displayError ends graphx and reports it
+    // the chunk memory (bss and VRAM; the bench adds a scratch AppVar, created before the world is
+    // opened, as creating a variable may move it), then the world file. On an error displayError
+    // ends graphx and reports it
     if (!windowAlloc()) {
         return 0;
     }
@@ -46,7 +47,6 @@ int main(void) {
     hudInit();
     displayInit();
 
-    // the chunks load after displayInit: computeExposure uses DBL_BUF2
     cameraInit();
     sceneInit();
     windowInit();
@@ -93,8 +93,7 @@ int main(void) {
 
         // cull, project and rasterize before the wait (fill.h: unless the span list overflows)
         const uint24_t project_start = CYCLES();
-        projectScene();
-        fillScene(projected, num_projected, draw_buffer_ctrl);
+        projectScene(draw_buffer_ctrl);
         const uint24_t project_cycles = CYCLES() - project_start;
 
         // idle time, so it is left out of the frame time
@@ -121,7 +120,7 @@ int main(void) {
     }
 
     // The world's last played date last: archiving it may show the OS garbage collection screen,
-    // and it needs free RAM, so the scratch AppVar goes first
+    // and it needs free RAM, so a scratch AppVar (the bench's, or an older version's) goes first
     kb_SetMode(kb_mode);
     gfx_End();
     windowFree();

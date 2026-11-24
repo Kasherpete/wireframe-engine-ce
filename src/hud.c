@@ -4,8 +4,8 @@
 #ifdef SHOW_HUD
 #include <fontlibc.h>
 
-uint24_t prof_sorts, prof_loads, prof_chunks, prof_records;
-uint32_t prof_sort_cycles, prof_load_cycles, prof_cull_cycles, prof_proj_cycles;
+uint24_t prof_sorts, prof_loads, prof_chunks, prof_records, prof_occluded;
+uint32_t prof_sort_cycles, prof_load_cycles, prof_cull_cycles, prof_proj_cycles, prof_fill_cycles, prof_occ_cycles;
 
 static const uint8_t font_data[] = {
     #include "../font/myfont.inc"

@@ -32,9 +32,9 @@
 // the four VRAM frames
 #define BUFFER_1  0xD40000    // drawn and shown in turn
 #define BUFFER_2  0xD49600
-#define DBL_BUF1  0xD52C00    // fill.S span list (fill.h); nothing else may use it
-#define DBL_BUF2  0xD5C200    // blank frame during displayInit, then scratch: chunks.c (the occupancy
-                              // grid, then chunk slots), or in the bench fill_ref.c's lists
+#define DBL_BUF1  0xD52C00    // fill.S span list (fill.h); between frames computeExposure's
+                              // occupancy grid (chunks.c). Nothing else may use it
+#define DBL_BUF2  0xD5C200    // chunk slots (chunks.c), and in the bench fill_ref.c's lists
 #define DBL_BUF2_END 0xD65800 // the end of VRAM
 
 #define draw_buffer_ctrl    lcd_LpBase   // where graphx draws
@@ -58,8 +58,7 @@ void displayProgress(uint24_t done);
 // after the first swapBuffer: waits until the LCD shows the first frame, then the game palette
 void displayLoadingEnd(void);
 
-// BUFFER_2 becomes the draw buffer (displayLoading first if it has not run). Before the window
-// loads: chunks.c uses DBL_BUF2 as scratch afterwards
+// BUFFER_2 becomes the draw buffer (displayLoading first if it has not run)
 void displayInit(void);
 
 // ends graphx if it is running, prints line1 (and line2 unless NULL) on the home screen and waits

@@ -98,17 +98,9 @@ void setupCamera(void) {
     const uint8_t angle = yaw[2];
     const int24_t s = sinTable[angle];
     const int24_t c = sinTable[(uint8_t)(angle + 64)];
-    // a multiple of 64 steps, fraction included: (player_yaw & 0x3fffff) == 0. Ifs, not a
-    // combined test: see the compiler bug in CLAUDE.md
-    uint8_t cardinal = 0;
-    if ((yaw[2] & 0x3f) == 0) {
-        if (yaw[1] == 0) {
-            if (yaw[0] == 0) {
-                cardinal = 1;
-            }
-        }
-    }
-    cam_cardinal = cardinal;
+    // N/E/S/W: the rotation is sampled at the step angle (the fraction of a step is ignored), so a
+    // multiple of 64 steps is an exactly cardinal view, whatever the fraction (the fast path)
+    cam_cardinal = (angle & 0x3f) == 0;
     memcpy(cam_axis_corner, axis_corners[angle >> 6], 4);
 
     // grid cell, and the position within it in 1/256 units

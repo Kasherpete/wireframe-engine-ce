@@ -153,10 +153,12 @@ typedef struct {
 // out[], until room slots are used. The grid index of a record is X + bias_x, Y + cam_bias_y,
 // Z + bias_z. runs: the faces the chunk's runs draw (FACE_XP | FACE_XN or FACE_ZP | FACE_ZN), or 0:
 // its runs are skipped and its voxels draw all their faces (chunks.h, runs). Returns how many slots
-// it used, in record order (0 if n or room is 0); project_full is set when out[] is full (a run may
-// leave a slot unused)
+// it used, in record order (0 if n or room is 0). When out[] is full it sets project_full (it does
+// not clear it) and stops: project_left is then the records not done, the last of rec[] (a run
+// that did not fit, or fit only its first piece, is not done: calling again with the rest is
+// exact, a piece drawn twice is hidden by itself the second time). Otherwise project_left is 0
 extern uint8_t face_x[256], face_y[256], face_z[256];  // FACE_* towards the camera, by grid index
-extern uint8_t project_full;
+extern uint8_t project_full, project_left;
 uint8_t projectRecords(const int8_t (*rec)[5], uint8_t n, projected_box_t *out, uint8_t room,
                        int24_t bias_x, int24_t bias_z, uint8_t runs);
 

@@ -4,7 +4,7 @@
 // Renders BENCH_VIEWS camera views from a fixed seed (positions in the BENCH_XMIN .. BENCH_ZMAX
 // box of cells, 0.5 .. 2.5 units up, a quarter of them exactly N/E/S/W) and shows the total
 // cycles of the window updates (chunk loads and exposure), projectScene (with the chunk sorts in
-// it, also shown on their own), fillScene and drawSpans, the worst view, and the most boxes in a
+// it, also shown on their own; the filling in it shown as fill), drawSpans, the worst view, and the most boxes in a
 // view. Checked on every view:
 //   sort bad   the visible chunks are in order (keys near to far, as chunks.h defines them for
 //              the chunk's mode: plain, or with runs) and hold the same records
@@ -15,12 +15,14 @@
 // a frame outside the scene: setupCamera and the de-interlace copy.
 //   bad px     with -DFILL_REFERENCE each view is also drawn by fill_ref.c into BUFFER_2 and
 //              compared byte for byte with BUFFER_1
+//   occ px     with -DBENCH_OCCLUSION_CHECK each view is also drawn without the chunk occlusion
+//              test (occlusion_enabled 0) into BUFFER_2 and compared with BUFFER_1: should be 0
 //   run px     with -DBENCH_RUNS_CHECK each view is also drawn without runs (runs_enabled 0) into
 //              BUFFER_2 and compared with BUFFER_1: runs should change only near-plane slivers
 //              (and level of detail rectangles: use -DBENCH_LOD_RECT=255 to compare without them)
 // -DBENCH_LOD_RECT=a overrides the level of detail distance, -DBENCH_RENDER=d the far plane
 // (render_dist), -DBENCH_FOG=d fog_dist (at or beyond the far plane: no fog), -DBENCH_RUN_DIST=d
-// run_dist (chunks.h).
+// run_dist (chunks.h), -DBENCH_NO_OCCLUSION turns the chunk occlusion test off.
 // -DBENCH_SCENES renders the fixed close-up views of scenes[] instead (BENCH_VIEWS of them, cycling
 // through the list with a quarter cell of sideways offset per round): walls, the house and the hill
 // of the test world up close, the slow views.
@@ -192,6 +194,9 @@ int main(void) {
 #ifdef BENCH_FOG
     fog_dist = BENCH_FOG;
 #endif
+#ifdef BENCH_NO_OCCLUSION
+    occlusion_enabled = 0;
+#endif
 #ifdef BENCH_RUN_DIST
     run_dist = BENCH_RUN_DIST;
 #endif
@@ -212,14 +217,14 @@ int main(void) {
 
     uint32_t t_load = 0, t_proj = 0, t_fill = 0, t_draw = 0, t_max = 0, nboxes = 0, t_setup = 0, t_deint = 0;
     uint24_t max_boxes = 0, full = 0, max_load = 0;
-#if defined(FILL_REFERENCE) || defined(BENCH_RUNS_CHECK)
+#if defined(FILL_REFERENCE) || defined(BENCH_RUNS_CHECK) || defined(BENCH_OCCLUSION_CHECK)
     uint24_t mismatch = 0, badviews = 0, first_bad = 0;
 #endif
     prof_sorts = 0;
     prof_sort_cycles = 0;
     prof_loads = 0;
-    prof_cull_cycles = prof_proj_cycles = 0;
-    prof_chunks = prof_records = 0;
+    prof_cull_cycles = prof_proj_cycles = prof_fill_cycles = prof_occ_cycles = 0;
+    prof_chunks = prof_records = prof_occluded = 0;
     for (uint24_t v = 0; v < BENCH_VIEWS; v++) {
 #if defined(BENCH_SCENES)
         const int16_t *sc = scenes[v % SCENES];
@@ -258,11 +263,11 @@ int main(void) {
         }
         const uint24_t before = windowXor();
         setDrawBuffer(BUFFER_1);
+        const uint32_t fill0 = prof_fill_cycles;
         t0 = CYCLES();
-        projectScene();
-        uint24_t t1 = CYCLES();
-        fillScene(projected, num_projected, BUFFER_1);
+        projectScene(BUFFER_1);
         uint24_t t2 = CYCLES();
+        const uint24_t t1 = t2 - (uint24_t)(prof_fill_cycles - fill0);   // projectScene less the filling
         drawSpans();
         uint24_t t3 = CYCLES();
         deinterlaceFrame(0);
@@ -274,21 +279,26 @@ int main(void) {
         if (t3 - t0 > t_max) t_max = t3 - t0;
         nboxes += num_projected;
         if (num_projected > max_boxes) max_boxes = num_projected;
-        if (num_projected == MAX_PROJECTED) full++;
+        if (chunks_done < WINDOW_N) full++;       // stopped early: every row covered
         if (windowXor() != before) sort_bad++;
         checkSort();
 #ifdef BENCH_RUNS_CHECK
         runs_enabled = 0;
         unsortAll();
-        projectScene();
-        fillScene(projected, num_projected, BUFFER_2);
+        projectScene(BUFFER_2);
         drawSpans();
         runs_enabled = 1;
         unsortAll();
 #endif
-#if defined(FILL_REFERENCE) || defined(BENCH_RUNS_CHECK)
+#ifdef BENCH_OCCLUSION_CHECK
+        occlusion_enabled = 0;
+        projectScene(BUFFER_2);
+        drawSpans();
+        occlusion_enabled = 1;
+#endif
+#if defined(FILL_REFERENCE) || defined(BENCH_RUNS_CHECK) || defined(BENCH_OCCLUSION_CHECK)
 #ifdef FILL_REFERENCE
-        fillSceneRef(projected, num_projected, BUFFER_2);
+        fillSceneRef(projected_log, num_logged, BUFFER_2);
         drawSpansRef();
 #endif
         uint24_t bad = 0;
@@ -327,7 +337,11 @@ int main(void) {
     line(3, 75, "run px ", mismatch);
     line(3, 83, "run views ", badviews);
 #endif
-#if defined(FILL_REFERENCE) || defined(BENCH_RUNS_CHECK)
+#ifdef BENCH_OCCLUSION_CHECK
+    line(3, 75, "occ px ", mismatch);
+    line(3, 83, "occ views ", badviews);
+#endif
+#if defined(FILL_REFERENCE) || defined(BENCH_RUNS_CHECK) || defined(BENCH_OCCLUSION_CHECK)
     line(3, 91, "1st bad ", first_bad);    // view number + 1, 0: none
 #endif
     line(84, 3,  "sorts ", prof_sorts);
@@ -340,6 +354,8 @@ int main(void) {
     line(84, 59, "cull k ", (uint24_t)(prof_cull_cycles / 1000));
     line(84, 67, "prec k ", (uint24_t)(prof_proj_cycles / 1000));
     line(84, 75, "chunks ", prof_chunks);
+    line(3, 99, "occluded ", prof_occluded);
+    line(3, 107, "occ k ", (uint24_t)(prof_occ_cycles / 1000));
     line(84, 83, "rec/v ", prof_records / BENCH_VIEWS);
     line(84, 91, "setup k ", (uint24_t)(t_setup / 1000));
     line(84, 99, "deint k ", (uint24_t)(t_deint / 1000));

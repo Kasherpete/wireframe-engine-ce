@@ -19,9 +19,9 @@ typedef struct {
     uint8_t len;
     uint8_t colour;
 } span_t;
-// The span list and the intervals live in DBL_BUF2 after the exposure grid of chunks.c and the
-// chunk slots there (CHUNKS_VRAM, fewer with FILL_REFERENCE): bss has no room for them
-#define SPAN_LIST_REF (DBL_BUF2 + DBL_BUF2_FREE + CHUNKS_VRAM * sizeof(chunk_t))
+// The span list and the intervals live in DBL_BUF2 after the chunk slots there (CHUNKS_VRAM, fewer
+// with FILL_REFERENCE): bss has no room for them
+#define SPAN_LIST_REF (DBL_BUF2 + CHUNKS_VRAM * sizeof(chunk_t))
 #define GAP_X0_REF    (SPAN_LIST_REF + SPAN_MAX * 5)
 #define GAP_X1_REF    (GAP_X0_REF + VIEW_H * GAP_MAX)
 _Static_assert(GAP_X1_REF + VIEW_H * GAP_MAX <= DBL_BUF2_END, "the reference arrays must fit DBL_BUF2");

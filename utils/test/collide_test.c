@@ -124,8 +124,7 @@ int main(void) {
         if (ey < top) top = ey;
         setupCamera();
         windowFollow();
-        projectScene();
-        fillScene(projected, num_projected, draw_buffer_ctrl);
+        projectScene(draw_buffer_ctrl);
         waitForBufferScan();
         drawSpans();
         fontlib_SetCursorPosition(3, 3);

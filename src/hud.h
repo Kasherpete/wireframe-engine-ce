@@ -16,8 +16,8 @@
 #define PROF(...)  __VA_ARGS__
 
 // per-phase totals since startup (the bench reads and resets them)
-extern uint24_t prof_sorts, prof_loads, prof_chunks, prof_records;
-extern uint32_t prof_sort_cycles, prof_load_cycles, prof_cull_cycles, prof_proj_cycles;
+extern uint24_t prof_sorts, prof_loads, prof_chunks, prof_records, prof_occluded;
+extern uint32_t prof_sort_cycles, prof_load_cycles, prof_cull_cycles, prof_proj_cycles, prof_fill_cycles, prof_occ_cycles;
 
 // the rows the HUD draws into: deinterlaceFrame always copies them
 #define HUD_ROWS   28

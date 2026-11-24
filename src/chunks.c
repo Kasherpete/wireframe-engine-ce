@@ -9,10 +9,10 @@
 #include "hud.h"
 
 // chunk (cx, cz) lives in slot (cx mod 7) * 7 + (cz mod 7). The first CHUNKS_BSS slots are in
-// bss, the next CHUNKS_VRAM in DBL_BUF2, the rest in the scratch AppVar (windowAlloc)
+// bss, the next CHUNKS_VRAM in DBL_BUF2, the rest (FILL_REFERENCE only) in the scratch AppVar
+// (windowAlloc)
 static chunk_t  chunks_bss[CHUNKS_BSS];
 static chunk_t *slot[WINDOW_N];
-static uint8_t  scratch_handle;
 chunk_t *win[WINDOW_N];
 int24_t  win_cx, win_cz;
 uint8_t  visit_order[WINDOW_N];
@@ -202,12 +202,12 @@ static void loadChunk(chunk_t *ch, int24_t cx, int24_t cz) {
 // to one below its lowest (and every cell at y >= 0 with a ground plane). Then each voxel looks at
 // its 6 neighbouring cells. A neighbour chunk outside the window counts as empty: the faces
 // towards it point away from the camera (the camera is in the centre chunk), so they are never
-// drawn anyway. The grid is in DBL_BUF2, the VRAM frame shown only during displayInit.
-#define OCC          ((uint8_t *)DBL_BUF2)
+// drawn anyway. The grid is in DBL_BUF1, the span list's frame: fill.S only uses it between
+// fillBegin and drawSpans, and the grid is cleared on every call, so nothing in it has to last.
+#define OCC          ((uint8_t *)DBL_BUF1)
 #define OCC_LAYERS   (WORLD_Y_MAX - WORLD_Y_MIN + 3)          // y: a chunk's range, plus one each side
 _Static_assert(OCC_ROW == CHUNK_SIZE + 2 && OCC_LAYER == OCC_ROW * OCC_ROW, "x and z: -1 .. 8");
-// (DBL_BUF2 from DBL_BUF2_FREE on holds chunks, or in the bench fill_ref.c's span list)
-_Static_assert(OCC_ROW + 1 + OCC_LAYERS * OCC_LAYER <= DBL_BUF2_FREE, "the occupancy grid must fit the start of DBL_BUF2");
+_Static_assert(OCC_ROW + 1 + OCC_LAYERS * OCC_LAYER <= DBL_BUF2 - DBL_BUF1, "the occupancy grid must fit DBL_BUF1");
 
 // occ_layer[L]: the address of cell (x 0, layer L, z 0), so cell (x, L, z) is at
 // occ_layer[L] + OCC_ROW z + x for x and z from -1 to CHUNK_SIZE. Layer L is Y - ymin + 1.
@@ -290,43 +290,55 @@ void computeExposure(uint8_t w) {
 
 // ---- the window ----
 
-#define SCRATCH_SIZE  ((WINDOW_N - CHUNKS_BSS - CHUNKS_VRAM) * sizeof(chunk_t))
+#define SCRATCH_SLOTS (WINDOW_N - CHUNKS_BSS - CHUNKS_VRAM)
+#define SCRATCH_SIZE  (SCRATCH_SLOTS * sizeof(chunk_t))
 _Static_assert(SCRATCH_SIZE < 65000, "an AppVar holds at most 65505 bytes");
-_Static_assert(DBL_BUF2_FREE + CHUNKS_VRAM * sizeof(chunk_t) <= DBL_BUF2_END - DBL_BUF2, "the chunks must fit DBL_BUF2");
+_Static_assert(CHUNKS_VRAM * sizeof(chunk_t) <= DBL_BUF2_END - DBL_BUF2, "the chunks must fit DBL_BUF2");
 #ifndef FILL_REFERENCE
-_Static_assert(SCRATCH_SIZE <= 15 * 1024, "the message below");
+_Static_assert(SCRATCH_SLOTS == 0, "release builds keep every chunk in bss or VRAM");
+#endif
+
+#if SCRATCH_SLOTS > 0
+static uint8_t scratch_handle;
 #endif
 
 // The AppVar's data pointer stays valid as long as no variable is created, deleted, resized or
 // (un)archived: nothing does that between here and windowFree. The VRAM slots are only written
-// from windowInit on, after displayInit has shown DBL_BUF2 for the last time
+// from windowInit on, after displayInit (which does not use DBL_BUF2)
 uint8_t windowAlloc(void) {
+#if SCRATCH_SLOTS > 0
     scratch_handle = ti_Open(CHUNKS_APPVAR, "w");
-    if (scratch_handle && ti_Resize(SCRATCH_SIZE, scratch_handle) == (int)SCRATCH_SIZE) {
-        chunk_t *p = ti_GetDataPtr(scratch_handle);
-        chunk_t *vram = (chunk_t *)(DBL_BUF2 + DBL_BUF2_FREE);
-        for (uint8_t i = 0; i < WINDOW_N; i++) {
-            if (i < CHUNKS_BSS) {
-                slot[i] = &chunks_bss[i];
-            } else if (i < CHUNKS_BSS + CHUNKS_VRAM) {
-                slot[i] = vram++;
-            } else {
-                slot[i] = p++;
-            }
-        }
-        return 1;
+    if (!scratch_handle || ti_Resize(SCRATCH_SIZE, scratch_handle) != (int)SCRATCH_SIZE) {
+        windowFree();
+        displayError("Not enough free RAM for the", "chunk window");
+        return 0;
     }
-    windowFree();
-    displayError("Not enough free RAM: the", "chunks need 15 KB");
-    return 0;
+    chunk_t *p = ti_GetDataPtr(scratch_handle);
+#endif
+    chunk_t *vram = (chunk_t *)DBL_BUF2;
+    for (uint8_t i = 0; i < WINDOW_N; i++) {
+        if (i < CHUNKS_BSS) {
+            slot[i] = &chunks_bss[i];
+        } else if (i < CHUNKS_BSS + CHUNKS_VRAM) {
+            slot[i] = vram++;
+        }
+#if SCRATCH_SLOTS > 0
+        else {
+            slot[i] = p++;
+        }
+#endif
+    }
+    return 1;
 }
 
 void windowFree(void) {
+#if SCRATCH_SLOTS > 0
     if (scratch_handle) {
         ti_Close(scratch_handle);
         scratch_handle = 0;
     }
-    ti_Delete(CHUNKS_APPVAR);
+#endif
+    ti_Delete(CHUNKS_APPVAR);       // (also one left by an older version)
 }
 
 void windowInit(void) {

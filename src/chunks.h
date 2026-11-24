@@ -8,11 +8,12 @@
 // With the far plane at GRID_RANGE = 24 cells and the camera anywhere in the centre chunk, every
 // cell within the far plane is in the window.
 //
-// Memory: 49 chunks of 1300 bytes do not fit in bss. CHUNKS_BSS of them are in bss, CHUNKS_VRAM in
-// the spare VRAM frame DBL_BUF2 after the occupancy grid (not shown after displayInit), the rest in
-// a scratch AppVar (CHUNKS_APPVAR, 14.3 KB) that windowAlloc() creates before the world is opened
-// (creating a variable may move the world AppVar if it is in RAM) and windowFree() deletes before
-// worldClose.
+// Memory: 49 chunks of 1305 bytes do not fit in bss. CHUNKS_BSS of them are in bss, CHUNKS_VRAM in
+// the spare VRAM frame DBL_BUF2 (never shown). With FILL_REFERENCE (the bench) fewer fit there, and
+// the rest are in a scratch AppVar (CHUNKS_APPVAR) that windowAlloc() creates before the world is
+// opened (creating a variable may move the world AppVar if it is in RAM) and windowFree() deletes
+// before worldClose. computeExposure's occupancy grid is in the span list frame DBL_BUF1: it is
+// free between frames (drawSpans empties the list).
 //
 // ---- painter's order ----
 // Boxes are drawn near to far by their Manhattan distance in grid cells from the camera's cell,
@@ -106,14 +107,13 @@ typedef struct {
     int8_t  rec[CHUNK_MAX][5];       // {x, Y, z, material, exposed FACE_*}, or runs (above)
 } chunk_t;
 
-#define CHUNKS_BSS     24                       // chunk slots in bss
+#define CHUNKS_BSS     20                       // chunk slots in bss
 #ifdef FILL_REFERENCE
-#define CHUNKS_VRAM    4                        // the bench's fill_ref.c keeps its lists after them
+#define CHUNKS_VRAM    19                       // the bench's fill_ref.c keeps its lists after them
 #else
-#define CHUNKS_VRAM    14                       // chunk slots in DBL_BUF2 from DBL_BUF2_FREE
+#define CHUNKS_VRAM    29                       // chunk slots in DBL_BUF2: all of the window's others
 #endif
-#define DBL_BUF2_FREE  0x4C00                   // DBL_BUF2 from here on: chunks (or fill_ref.c)
-#define CHUNKS_APPVAR  "VXSCRTCH"               // the scratch AppVar for the others (deleted on exit)
+#define CHUNKS_APPVAR  "VXSCRTCH"               // the scratch AppVar for the rest, if any (deleted on exit)
 
 extern chunk_t *win[WINDOW_N];         // the chunk at window position (dz + 3) * 7 + (dx + 3)
 extern int24_t  win_cx, win_cz;        // the chunk the window is centred on
@@ -125,12 +125,13 @@ extern uint8_t  runs_enabled;
 // chunk_t.sorted after changing it
 extern uint8_t  run_dist;
 
-// Creates the scratch AppVar for the chunk slots that are not in bss. Before worldStart (so the world
-// does not move after it is opened) and before graphx starts: on failure (not enough free RAM) it
-// says so on the home screen, waits for a key and returns 0
+// Sets the chunk slot pointers, and creates the scratch AppVar for the slots that are in neither bss
+// nor VRAM (only with FILL_REFERENCE). Before worldStart (so the world does not move after it is
+// opened) and before graphx starts: on failure (not enough free RAM) it says so on the home screen,
+// waits for a key and returns 0
 uint8_t windowAlloc(void);
 
-// Deletes the scratch AppVar. After gfx_End, before worldClose (which may need the RAM)
+// Deletes the scratch AppVar (if any). After gfx_End, before worldClose (which may need the RAM)
 void windowFree(void);
 
 // the sort tables, the occupancy grid and an empty window (nothing loaded). After displayInit and
@@ -151,7 +152,8 @@ void sortChunk(chunk_t *ch);
 // Recomputes the exposed faces of the chunk at window position w, and turns its runs off (they would
 // not match a changed chunk; its voxels draw all their faces again). For runtime world changes: after
 // changing its records (clear chunk_t.sorted, update ymin/ymax), call it for w and its 4
-// neighbours, then collideInvalidate()
+// neighbours, then collideInvalidate(). Never while spans are listed (between projectScene and
+// drawSpans): its occupancy grid is in the span list's frame, DBL_BUF1
 void computeExposure(uint8_t w);
 
 #endif

@@ -1,6 +1,7 @@
-; fillScene / drawSpans: filled, shaded voxels with hidden surface removal.
+; fillBegin / fillBoxes / drawSpans: filled, shaded voxels with hidden surface removal.
 ;
-;   void fillScene(const projected_box_t *boxes, uint24_t n, uint24_t base)
+;   void fillBegin(uint24_t base)
+;   uint8_t fillBoxes(const projected_box_t *boxes, uint24_t n)
 ;   void drawSpans(void)
 ;
 ; fill_ref.c is the same algorithm in C and draws the same frame, pixel for pixel: verify changes
@@ -24,7 +25,7 @@
 ; times wider than tall on screen. Per-row work beat per-column work by that factor (a column
 ; version of this file needed about twice the time on a floor).
 ;
-; fillScene only lists spans: it does not touch the frame buffer, so main() runs it before
+; fillBoxes only lists spans: it does not touch the frame buffer, so projectScene runs it before
 ; waitForBufferScan, while the LCD still shows the last frame. drawSpans, after the wait, writes
 ; the pixels: that is the only part tied to the LCD refresh.
 ;
@@ -37,7 +38,7 @@
 ; Its coordinates v[] are copied to the start of .Lpage. A face is an entry of a face table: its 4
 ; vertices in clockwise screen order, twice over (so a side never wraps), each as the page offsets
 ; of its x and its y. .Lfaces_gen holds them for the GEN layout (fixed); for the AXIS layout they
-; depend on the direction faced, so fillScene builds .Lfaces_axis per frame from cam_axis_corner.
+; depend on the direction faced, so fillBegin builds .Lfaces_axis per frame from cam_axis_corner.
 ;
 ; ---- A run (BOX_RUN, chunks.h) ----
 ; One face of P points (x, top y, bottom y each, copied to the start of .Lpage): a polygon of 2 P
@@ -169,6 +170,7 @@
 #define L_NP		185		/* run: points */
 #define L_CNT		186		/* run: vertices left to look at */
 #define L_I		187		/* run: entry offset of the vertex looked at */
+#define L_NEARB		188		/* AXIS: the FACE_* bit of the near face (a rectangle), else 0 */
 #define P_LOD		192		/* lod_slot[64], written by sceneInit (scene.c) */
 #define V(o)		ix + o - 128
 #if RUN_POINTS != 9 || RUN_SLOT_POINTS != 4 || RUN_SLOT2_POINTS != 8 || 9 * RUN_POINTS > P_MAT
@@ -187,19 +189,16 @@
 	.extern	_bg_rows
 
 ; ==================================================================================================
-	.section	.text._fillScene,"ax",@progbits
-	.global	_fillScene
-	.type	_fillScene,@function
-_fillScene:
+	.section	.text._fillBegin,"ax",@progbits
+	.global	_fillBegin
+	.type	_fillBegin,@function
+_fillBegin:
 	push	ix
 	ld	iy, 0
-	add	iy, sp			; iy + 6 = boxes, iy + 9 = n, iy + 12 = base
-	ld	a, i			; p/v = interrupts enabled
-	push	af
-	di
+	add	iy, sp			; iy + 6 = base
 
 	; every row: one open interval [0, VIEW_W), and its address in this frame
-	ld	hl, (iy + 12)
+	ld	hl, (iy + 6)
 	ld	de, VIEW_X0
 	add	hl, de
 	ld	(.Lfield), hl
@@ -213,7 +212,6 @@ _fillScene:
 	add	hl, de
 	lea	ix, ix + GAP_BLOCK
 	djnz	1b
-	push	iy
 	ld	ix, .Lrows
 	ld	bc, 1
 	ld	de, 0xffffff
@@ -225,7 +223,6 @@ _fillScene:
 	lea	ix, ix + GAP_BLOCK
 	dec	a
 	jr	nz, 2b
-	pop	iy
 	ld	a, VIEW_H
 	ld	(.Lopen), a
 	ld	(.Lbg_pending), a	; non-zero: drawSpans fills the background
@@ -238,9 +235,25 @@ _fillScene:
 	; facing N/E/S/W: the face table of the AXIS layout
 	ld	a, (_cam_cardinal)
 	or	a, a
-	push	iy
 	call	nz, .Laxis_table
-	pop	iy
+	pop	ix
+	ret
+
+
+; ==================================================================================================
+	.section	.text._fillBoxes,"ax",@progbits
+	.global	_fillBoxes
+	.type	_fillBoxes,@function
+_fillBoxes:
+	ld	a, (.Lopen)
+	or	a, a
+	ret	z			; every row is closed already
+	push	ix
+	ld	iy, 0
+	add	iy, sp			; iy + 6 = boxes, iy + 9 = n
+	ld	a, i			; p/v = interrupts enabled
+	push	af
+	di
 
 	; boxes front to back: boxes[] is sorted near to far. .Lnbox counts the boxes left after
 	; this one, so the loop runs while decrementing it does not borrow
@@ -269,12 +282,21 @@ _fillScene:
 	jp	po, 1f
 	ei
 1:	pop	ix
+	ld	a, (.Lopen)
 	ret
 
 
 ; ---- .Lfaces_axis from cam_axis_corner. AXIS layout: nl nr nt nb fl fr ft fb, and edge e
 ; (near left, near right, far left, far right) is world corner k = cam_axis_corner[e]
 .Laxis_table:
+	; the near face (.Lbox): its FACE_* bit, by the world corner of the near-left edge
+	ld	a, (_cam_axis_corner)
+	ld	de, 0
+	ld	e, a
+	ld	hl, .Lnear_bits
+	add	hl, de
+	ld	a, (hl)
+	ld	(.Lnear_bit), a
 	ld	hl, .Lpage
 	.macro	AXMAP e
 	ld	a, (_cam_axis_corner + \e)
@@ -382,6 +404,16 @@ _fillScene:
 2:	ld	(V(L_FTAB)), hl
 	ld	(V(L_CLAMP)), a
 
+	; AXIS: the FACE_* bit of the near face, a rectangle (.Lface_sel), else 0
+	xor	a, a
+	ld	(V(L_NEARB)), a
+	ld	a, (iy + PB_KIND)
+	cp	a, BOX_AXIS
+	jr	nz, 3f
+	ld	a, (.Lnear_bit)
+	ld	(V(L_NEARB)), a
+3:
+
 	; ---- each visible face ----
 	.macro	FACE_IF f, slot
 	bit	\f, (V(L_FACES))
@@ -389,7 +421,8 @@ _fillScene:
 	ld	iy, (V(L_FTAB))
 	lea	iy, iy + 16 * \f
 	ld	a, (V(P_MAT + \slot))
-	call	.Lface
+	ld	b, 1 << \f
+	call	.Lface_sel
 1:
 	.endm
 	FACE_IF	0, MAT_XSIDE
@@ -399,6 +432,33 @@ _fillScene:
 	FACE_IF	4, MAT_TOP
 	FACE_IF	5, MAT_BOTTOM
 	ret
+
+
+; ---- face b (FACE_* bit) of a box, entry iy, colour a: the near face of an AXIS box is a rectangle,
+; x [nl, nr) by y [nt, nb) (two vertical edges): the rectangle path, without the vertex scans and
+; the edges. The same spans as .Lface (an edge of constant x gives that x in every row)
+.Lface_sel:
+	ld	c, a
+	ld	a, (V(L_NEARB))
+	and	a, b
+	ld	a, c
+	jp	z, .Lface
+	call	.Lcolour
+	ld	hl, (V(P_BOX + 0))	; nl
+	CLAMP8
+	ld	(V(L_RXL)), a
+	ld	hl, (V(P_BOX + 3))	; nr
+	CLAMP8
+	ld	(V(L_RXR)), a
+	sub	a, (V(L_RXL))
+	ret	z			; no column (as .Lface_x)
+	ret	c
+	ld	hl, (V(P_BOX + 6))	; nt
+	ld	(V(L_YMIN)), hl
+	ld	hl, (V(P_BOX + 9))	; nb
+	ld	(V(L_YMAX)), hl
+	ld	(V(L_RECT)), 1
+	jp	.Lrows_setup
 
 
 ; ---- a distant box drawn as one rectangle: iy -> box (v[] = left, right, top, bottom),
@@ -1336,6 +1396,42 @@ _fillScene:
 	ret
 
 
+; ==============================================================================================
+; uint8_t fillSees(uint8_t xl, uint8_t xr, uint8_t y0, uint8_t rows): non-zero if one of rows
+; y0 .. y0 + rows - 1 (rows >= 1, all in the viewport) has an open interval overlapping columns
+; [xl, xr) (the test of .Lrows_find). projectScene skips a chunk whose screen bounds see nothing
+	.section	.text._fillSees,"ax",@progbits
+	.global	_fillSees
+	.type	_fillSees,@function
+_fillSees:
+	push	ix
+	ld	iy, 0
+	add	iy, sp			; iy + 6 xl, 9 xr, 12 y0, 15 rows
+	ld	ix, .Lpage + 128
+	ld	a, (iy + 6)
+	ld	(V(L_RXL)), a
+	ld	a, (iy + 9)
+	ld	(V(L_RXR)), a
+	ld	l, (iy + 12)
+	ld	h, GAP_BLOCK
+	mlt	hl			; (clears the upper byte)
+	ld	de, .Lrows
+	add	hl, de
+	ld	de, GAP_BLOCK
+	ld	b, (iy + 15)
+1:	ROW_SEES
+	jr	c, 2f
+	add	hl, de
+	djnz	1b
+	xor	a, a
+	pop	ix
+	ret
+2:	ld	a, 1
+	pop	ix
+	ret
+
+
+
 ; ==================================================================================================
 	.section	.text._drawSpans,"ax",@progbits
 	.global	_drawSpans
@@ -1498,7 +1594,7 @@ _drawSpans:
 
 ; ==================================================================================================
 ;   void deinterlaceFrame(uint8_t force)
-; After drawSpans: copies each viewport row of the frame fillScene drew to the LCD row below it
+; After drawSpans: copies each viewport row of the frame drawn to the LCD row below it
 ; (the 2 x 2 pixels, see CLAUDE.md), except the rows nothing was drawn in: drawSpans already filled
 ; both of their LCD rows with the background. The first force rows are copied anyway (the HUD
 ; draws text into them after drawSpans). About 1.3k cycles per row copied, 0.1k per row skipped
@@ -1566,6 +1662,10 @@ _deinterlaceFrame:
 	.macro	FACE_V a, b, c, d
 	.byte	\a, \b, \c, \d, \a, \b, \c, \d
 	.endm
+; the near face facing N/E/S/W, by its near-left corner (cam_axis_corner[0]): 0 facing +z (the
+; -z face, corners 0 and 1), 1 facing -x (+x: 1, 3), 2 facing +x (-x: 2, 0), 3 facing -z (+z: 3, 2)
+.Lnear_bits:
+	.byte	FACE_ZN, FACE_XP, FACE_XN, FACE_ZP
 .Lface_v:
 	FACE_V	1, 3, 7, 5		; +x: corners 1, 3
 	FACE_V	2, 0, 4, 6		; -x: 0, 2
@@ -1658,6 +1758,7 @@ _lod_slot:	.zero	64		; MAT_* slot of a rectangle by FACE_* bits (scene.c)
 .Lbg_pending:	.zero	1		; drawSpans still has to fill the background
 .Lboxp:		.zero	3
 .Lnbox:		.zero	3
+.Lnear_bit:	.zero	1		; AXIS: the FACE_* bit of the near face (.Laxis_table)
 .Lopen:		.zero	1		; rows with an open interval
 
 	.extern	_materials

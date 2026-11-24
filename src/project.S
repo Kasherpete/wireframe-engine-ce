@@ -260,9 +260,9 @@ _projectRecords:
 	xor	a, a
 	ld	(VAR(V_KEPT)), a
 	ld	a, (iy + 9)
+	ld	(VAR(V_LEFT)), a
 	or	a, a
 	jp	z, .Lend
-	ld	(VAR(V_LEFT)), a
 	ld	a, (iy + 15)
 	or	a, a
 	jp	z, .Lend
@@ -604,7 +604,7 @@ _projectRecords:
 	ld	(VAR(V_OUT)), iy
 	inc	(VAR(V_KEPT))
 	dec	(VAR(V_ROOM))
-	jp	z, .Lout_full		; out[] is full
+	jp	z, .Lout_kept		; out[] is full
 .Lskip:
 .Lnext:
 	ld	hl, (VAR(V_REC))
@@ -614,10 +614,14 @@ _projectRecords:
 	dec	(VAR(V_LEFT))
 	jp	nz, .Lrec
 .Lend:
+	ld	a, (VAR(V_LEFT))
+	ld	(_project_left), a
 	ld	a, (VAR(V_KEPT))
 	pop	ix
 	ret
-.Lout_full:
+.Lout_kept:				; full after keeping this record: it is done
+	dec	(VAR(V_LEFT))
+.Lout_full:				; (a run that did not fit is not: it is done again)
 	ld	a, 1
 	ld	(_project_full), a
 	jr	.Lend
@@ -1797,6 +1801,8 @@ _cam_fog:	.zero	3
 ; runs (.Lrun)
 	.global	_project_full
 _project_full:	.zero	1			; out[] is full (engine.h)
+	.global	_project_left
+_project_left:	.zero	1			; records not done (engine.h)
 .Lr_bx:		.zero	3			; bias_x, bias_z
 .Lr_bz:		.zero	3
 .Lr_xp:		.zero	3			; -> the {XC, XS} entry of the fixed line, then of cell lo
