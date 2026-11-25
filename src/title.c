@@ -53,9 +53,9 @@
 #define SPLASH_BAND       (PICO8_HEIGHT + 3)
 #define SPLASH_RISE(u)    (((u) * 3) >> 3)
 #define SPLASH_H          (SPLASH_BAND + SPLASH_RISE(SPLASH_W - 1))
-#define SPLASHES          10
+#define SPLASHES          9
 static const char *const splashes[SPLASHES] = {
-    "try basic!", "Opensource", "Made in C!", "Kasher.dev!", "now in 3d!", "no ads!", "Stay safe!", "Creeper?", "HelloWorld", "God cares!"
+    "try basic!", "Opensource", "Made in C!", "Kasher.dev!", "now in 3d!", "no ads!", "Stay safe!", "Creeper?", "HelloWorld"
 };
 gfx_UninitedSprite(splash, SPLASH_W, SPLASH_H);
 static uint8_t splash_ready = 0;
@@ -68,10 +68,24 @@ static uint8_t splash_ready = 0;
 #define SCREEN_SETTINGS  1
 #define SCREEN_WORLDS    2
 #define SCREEN_NAME      3      // typing a world name (rename, or a new world)
+#define SCREEN_NOWORLD   4      // no world could be opened: where to get one, Continue
 
 static const char *const labels[BUTTONS] = {"Play", "Settings", "Quit"};
 static uint8_t screen = SCREEN_MAIN;
 static uint8_t selected = 0;       // the button of the screen shown
+static uint8_t armed = 0;          // [2nd]/[enter] went down in the menu: its release chooses
+static const char *noworld_reason = NULL;
+
+// the pause menu: SCREEN_MAIN shows these instead (Settings at the same place, 1)
+#define PAUSE_BUTTONS  4
+#define PAUSE_RESUME   0
+#define PAUSE_SETTINGS 1
+#define PAUSE_SAVE     2
+#define PAUSE_QUIT     3
+static const char *const pause_labels[PAUSE_BUTTONS] = {
+    "Back to Game", "Settings", "Save & Quit", "Quit Without Saving"
+};
+static uint8_t paused = 0;
 // kb_Data[1 .. 7] at the last titlePoll, and the keys pressed and released since titleUpdate took
 // them (main waits for [2nd]/[enter] to be released first)
 #define KEY_GROUPS  7
@@ -195,6 +209,23 @@ static void openName(uint8_t is_new, const char *name) {
     name_buf[name_len] = '\0';
 }
 
+void titleNoWorld(const char *reason) {
+    screen = SCREEN_NOWORLD;
+    selected = 0;
+    noworld_reason = reason;
+}
+
+void titlePause(void) {
+    paused = 1;
+    screen = SCREEN_MAIN;
+    selected = PAUSE_RESUME;
+    armed = 0;
+    for (uint8_t g = 0; g < KEY_GROUPS; g++) {
+        key_last[g] = kb_Data[g + 1];
+        key_down[g] = key_up[g] = 0;
+    }
+}
+
 void titlePoll(void) {
     for (uint8_t g = 0; g < KEY_GROUPS; g++) {
         const uint8_t now = kb_Data[g + 1];
@@ -302,7 +333,9 @@ static uint8_t worldsUpdate(uint8_t pressed, uint8_t released) {
 }
 
 uint8_t titleUpdate(uint24_t dt) {
-    player_yaw += dt << TURN_SHIFT;
+    if (!paused) {
+        player_yaw += dt << TURN_SHIFT;     // the pause menu keeps the world as it was
+    }
 
     // the keys pressed and released since the last call (a tap shorter than a frame included)
     titlePoll();
@@ -340,6 +373,24 @@ uint8_t titleUpdate(uint24_t dt) {
             pressed = keys;
         }
     }
+    // a release chooses only after a press seen here (not a key held when the menu opened, as
+    // [2nd] for a jump just before the pause)
+    if (pressed & KEY_CHOOSE) {
+        armed = 1;
+    }
+    if (released & KEY_CHOOSE) {
+        if (!armed) {
+            released &= ~KEY_CHOOSE;
+        }
+        armed = 0;
+    }
+
+    if (screen == SCREEN_NOWORLD) {
+        if ((released & KEY_CHOOSE) || (pressed & KEY_BACK)) {
+            openScreen(SCREEN_MAIN, 0);
+        }
+        return TITLE_STAY;
+    }
 
     if (screen == SCREEN_NAME) {
         if (pressed & KEY_BACK) {
@@ -354,7 +405,7 @@ uint8_t titleUpdate(uint24_t dt) {
     }
 
     // the buttons of this screen
-    const uint8_t n = screen == SCREEN_SETTINGS ? SETTINGS : BUTTONS;
+    const uint8_t n = screen == SCREEN_SETTINGS ? SETTINGS : paused ? PAUSE_BUTTONS : BUTTONS;
     if ((pressed & KEY_UP) && selected > 0) {
         selected--;
     }
@@ -362,7 +413,23 @@ uint8_t titleUpdate(uint24_t dt) {
         selected++;
     }
 
-    if (screen == SCREEN_MAIN) {
+    if (screen == SCREEN_MAIN && paused) {
+        uint8_t choice = TITLE_STAY;
+        if (pressed & KEY_BACK) {
+            choice = TITLE_RESUME;
+        } else if (released & KEY_CHOOSE) {
+            if (selected == PAUSE_SETTINGS) {
+                openScreen(SCREEN_SETTINGS, 0);
+            } else {
+                choice = selected == PAUSE_RESUME ? TITLE_RESUME :
+                         selected == PAUSE_SAVE ? TITLE_SAVE_QUIT : TITLE_QUIT;
+            }
+        }
+        if (choice == TITLE_RESUME) {
+            paused = 0;
+        }
+        return choice;
+    } else if (screen == SCREEN_MAIN) {
         if (pressed & KEY_BACK) {
             return TITLE_QUIT;
         }
@@ -599,10 +666,9 @@ static void drawSettings(void) {
         drawButton(SETTINGS_X, MENU_Y0 + i * MENU_DY, SETTINGS_W, label, buttonColour(i == selected));
     }
     // PICO-8 text is lowercase (its capitals)
-    pico8Centred("like it? no need to donate -", STAR_Y, TEXT_COLOUR);
-    pico8Centred("just star it on github:", STAR_Y + LINE_DY, TEXT_COLOUR);
-    pico8Centred("github.com/kasherpete/", STAR_Y + 2 * LINE_DY, SPLASH_COLOUR);
-    pico8Centred("wireframe-engine-ce", STAR_Y + 3 * LINE_DY, SPLASH_COLOUR);
+    pico8Centred("leave a star on github!", STAR_Y, TEXT_COLOUR);
+    pico8Centred("github.com/kasherpete/", STAR_Y + LINE_DY, SPLASH_COLOUR);
+    pico8Centred("wireframe-engine-ce", STAR_Y + 2 * LINE_DY, SPLASH_COLOUR);
 }
 
 static void drawWorlds(void) {
@@ -688,6 +754,41 @@ static void drawName(void) {
     pico8Boxed("clear: cancel", LIST_X, NAME_HELP_Y + 3 * LINE_DY, TEXT_COLOUR);
 }
 
+// the pause menu: a heading and the buttons, nothing else over the frozen world
+#define PAUSE_HEAD_Y  20
+#define PAUSE_X       20
+#define PAUSE_W       120
+#define PAUSE_Y0      38
+#define PAUSE_DY      18
+
+static void drawPause(void) {
+    printShadowed("Game Paused", centredX("Game Paused"), PAUSE_HEAD_Y, TITLE_COLOUR);
+    for (uint8_t i = 0; i < PAUSE_BUTTONS; i++) {
+        drawButton(PAUSE_X, PAUSE_Y0 + i * PAUSE_DY, PAUSE_W, pause_labels[i],
+                   buttonColour(i == selected));
+    }
+}
+
+// no world: where to get one (PICO-8 text, lowercase shows as capitals)
+#define NOWORLD_Y   34
+#define CONTINUE_Y  76
+
+static void drawNoWorld(void) {
+    drawHeading("No World Found");
+    uint8_t y = NOWORLD_Y;
+    if (noworld_reason) {
+        char text[TEXT_MAX];
+        pico8Text(text, noworld_reason);
+        pico8Centred(text, y, SPLASH_COLOUR);
+        y += LINE_DY + 3;
+    }
+    pico8Centred("download world.8xv from", y, TEXT_COLOUR);
+    pico8Centred("kasher.dev/calcraft", y + LINE_DY, SPLASH_COLOUR);
+    pico8Centred("and send it to your calculator,", y + 2 * LINE_DY, TEXT_COLOUR);
+    pico8Centred("or make one with play > new", y + 3 * LINE_DY, TEXT_COLOUR);
+    drawButton(BUTTON_X, CONTINUE_Y, BUTTON_W, "Continue", SELECTED_COLOUR);
+}
+
 static void drawMain(void) {
     if (!splash_ready) {
         splashRender();
@@ -699,6 +800,7 @@ static void drawMain(void) {
     gfx_SetTextScale(2, 2);
     gfx_SetTextFGColor(SHADOW_COLOUR);
     gfx_PrintStringXY("CALCRAFT", centredX("CALCRAFT"), TITLE_Y + 2);
+    gfx_PrintStringXY("CALCRAFT", centredX("CALCRAFT") -1, TITLE_Y + 2);
     gfx_SetTextFGColor(TITLE_COLOUR);
     gfx_PrintStringXY("CALCRAFT", centredX("CALCRAFT"), TITLE_Y);
 
@@ -746,14 +848,18 @@ void titleDraw(void) {
     fontlib_SetWindow(0, 0, GFX_LCD_WIDTH, GFX_LCD_HEIGHT);
     fontlib_SetTransparency(true);
 
-    if (screen == SCREEN_MAIN) {
+    if (screen == SCREEN_MAIN && !paused) {
         drawMain();
         return;
     }
     gfx_SetTextScale(1, 1);
     gfx_SetFontData(legacy_font);
     gfx_SetFontSpacing(legacy_spacing);
-    if (screen == SCREEN_SETTINGS) {
+    if (screen == SCREEN_MAIN) {
+        drawPause();
+    } else if (screen == SCREEN_NOWORLD) {
+        drawNoWorld();
+    } else if (screen == SCREEN_SETTINGS) {
         drawSettings();
     } else if (screen == SCREEN_WORLDS) {
         drawWorlds();

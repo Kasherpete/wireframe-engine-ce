@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "player.h"
+#include "chunks.h"
 #include "collide.h"
 #include "engine.h"
 #include "world.h"
@@ -41,6 +42,7 @@ static int24_t eye_height = STAND_HEIGHT;  // 1/65536 units: eases between STAND
 #define STEP_MAX     (1L << 15)       // collision steps of at most half a unit: no cell is skipped
 #define ONE          (1L << 16)
 #define CELL_FLOOR(v) ((v) & ~(ONE - 1))   // the start of the cell v is in
+#define SAVED_FEET_MIN (CAM_Y_MIN + 3)     // a saved position: the eye stays below the ceiling
 
 // Per-frame steps are rate * dt / CLOCKS_PER_SEC. With these rates that is a few shifts and adds
 // (a 32-bit multiply and shift would be library calls, about 1k cycles each)
@@ -66,15 +68,42 @@ _Static_assert(BODY_RADIUS < ONE / 2 && STAND_HEIGHT + HEAD_ROOM < 2 * ONE, "col
 
 
 void playerSpawn(void) {
-    player_x = ((int32_t)world->spawn_x << 16) + (ONE >> 1);
-    player_z = ((int32_t)world->spawn_z << 16) + (ONE >> 1);
-    player_yaw = (uint24_t)world->spawn_yaw << 16;
-    feet_y = 0;                 // playerUpdate lifts the player out of anything standing there
+    int16_t x = 0, z = 0;
+    int8_t feet = 0;
+    uint8_t yaw = 0;
+    if (world && world->saved) {
+        // where "Save & Quit" left the player: the middle of that cell, the feet at the bottom of
+        // theirs (a player saved mid-jump falls), in the y range the collision keeps (CAM_Y_MIN)
+        x = world->saved_x;
+        z = world->saved_z;
+        feet = world->saved_feet;
+        yaw = world->saved_yaw;
+        if (feet > 0) {
+            feet = 0;
+        }
+        if (feet < SAVED_FEET_MIN) {
+            feet = SAVED_FEET_MIN;
+        }
+    } else if (world) {
+        x = world->spawn_x;
+        z = world->spawn_z;
+        yaw = world->spawn_yaw;
+    }
+    player_x = ((int32_t)x << 16) + (ONE >> 1);
+    player_z = ((int32_t)z << 16) + (ONE >> 1);
+    player_yaw = (uint24_t)yaw << 16;
+    feet_y = (int32_t)feet << 16;   // playerUpdate lifts the player out of anything standing there
     walk_vel = strafe_vel = turn_vel = fall_vel = 0;
     snapping = on_ground = 0;
     eye_height = STAND_HEIGHT;
     player_y = feet_y - eye_height;
     collide_changed = 1;        // look for anything overlapping the player
+}
+
+void playerSave(void) {
+    const int8_t feet = (int8_t)(CELL_OF(feet_y) + (FRAC_OF(feet_y) != 0));
+    worldSetPlayer((int16_t)CELL_OF(player_x), (int16_t)CELL_OF(player_z), feet,
+                   (uint8_t)(player_yaw >> 16));
 }
 
 

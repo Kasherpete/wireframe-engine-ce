@@ -19,6 +19,8 @@ _Static_assert(CRC_START == 9, "the checksum must cover everything after it");
 _Static_assert(__builtin_offsetof(world_header_t, size_x) == 32, "world_header_t layout");
 _Static_assert(__builtin_offsetof(world_header_t, spawn_yaw) == 38, "world_header_t layout");
 _Static_assert(__builtin_offsetof(world_header_t, ground) == 39, "world_header_t layout");
+_Static_assert(__builtin_offsetof(world_header_t, saved) == 40, "world_header_t layout");
+_Static_assert(__builtin_offsetof(world_header_t, saved_yaw) == 46, "world_header_t layout");
 _Static_assert(sizeof(world_chunk_t) == 4 && sizeof(world_voxel_t) == 4, "world record layout");
 #endif
 
@@ -269,22 +271,17 @@ const char *worldError(uint8_t err) {
 
 uint8_t worldStart(void) {
     worldScan();
-    if (world_count == 0) {
-        displayError("No worlds found.", "Send a world AppVar (.8xv)");
-        return 0;
-    }
-    uint8_t first_err = WORLD_OK;
+    uint8_t first_err = WORLD_MISSING;
     for (uint8_t i = 0; i < world_count; i++) {
         const uint8_t err = worldSelect(i);
         if (err == WORLD_OK) {
-            return 1;
+            return WORLD_OK;
         }
-        if (first_err == WORLD_OK) {
+        if (i == 0) {
             first_err = err;
         }
     }
-    displayError(worldError(first_err), world_list[0].appvar);
-    return 0;
+    return first_err;
 }
 
 const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count, uint8_t *runs) {
@@ -308,6 +305,19 @@ const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count, uint8_t 
 
 // ---- closing ----
 
+static uint8_t player_set = 0;
+static int16_t player_cx, player_cz;
+static int8_t  player_feet;
+static uint8_t player_step;
+
+void worldSetPlayer(int16_t x, int16_t z, int8_t feet, uint8_t yaw) {
+    player_cx = x;
+    player_cz = z;
+    player_feet = feet;
+    player_step = yaw;
+    player_set = 1;
+}
+
 uint8_t worldClose(uint8_t save) {
     if (!handle) {
         return 0;
@@ -329,6 +339,13 @@ uint8_t worldClose(uint8_t save) {
         h->last_played.hour = hours;
         h->last_played.minute = minutes;
         h->last_played.second = seconds;
+        if (player_set) {
+            h->saved = 1;
+            h->saved_x = player_cx;
+            h->saved_z = player_cz;
+            h->saved_feet = player_feet;
+            h->saved_yaw = player_step;
+        }
         h->crc = crc32(0, data + CRC_START, world_size - CRC_START);
         saved = 1;
         if (archived) {

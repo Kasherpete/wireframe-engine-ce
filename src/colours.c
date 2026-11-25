@@ -48,7 +48,7 @@ uint8_t bg_rows[3] = {CENTRE_Y, 0, VIEW_H - CENTRE_Y};
 
 void coloursInit(void) {
     uint8_t g = GROUND_COLOUR;
-    if (world->ground != WORLD_NO_GROUND) {
+    if (world && world->ground != WORLD_NO_GROUND) {
         g = materials[world->ground][MAT_TOP];
     }
     ground_colour3 = g * (uint24_t)0x010101;

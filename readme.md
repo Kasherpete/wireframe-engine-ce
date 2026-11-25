@@ -42,7 +42,7 @@ For now it is an engine; once it is in a ready state it will be used to make a c
 | [mode] / [del] | strafe left / right |
 | [2nd] | jump (hold to keep jumping) |
 | [alpha] | crouch |
-| [clear] | quit |
+| [clear] | pause menu: back to the game, settings, save & quit (keeps your position), quit without saving |
 
 ## Building
 
@@ -52,11 +52,11 @@ You need the [CE C toolchain](https://ce-programming.github.io/toolchain/) (CEde
 extract `ez80-clang` and `ez80-link` into `CEdev/bin`. Python 3 is used to generate the world.
 
 ```sh
-make          # bin/DEMOPRGM.8xp and the test world bin/WORLD.8xv
+make          # bin/CALCRAFT.8xp, the test world bin/WORLD.8xv and the big worlds (TUTORIAL, ISLANDS, PLAINS .8xv)
 make debug    # -O0 with dbg_printf
 ```
 
-Send `DEMOPRGM.8xp`, `WORLD.8xv` and the [CE C libraries](https://github.com/CE-Programming/libraries/releases)
+Send `CALCRAFT.8xp`, `WORLD.8xv` and the [CE C libraries](https://github.com/CE-Programming/libraries/releases)
 (`clibs.8xg`) to the calculator. On TI-OS 5.8 and later, native programs need a jailbreak such as
 [arTIfiCE](https://yvantt.github.io/arTIfiCE/) to run. Besides the program itself, the chunk window
 needs about 15 KB of free RAM (a temporary AppVar, deleted on exit).
@@ -69,7 +69,13 @@ needs about 15 KB of free RAM (a temporary AppVar, deleted on exit).
 python3 utils/make_world.py bin/WORLD.8xv                    # the test world (default)
 python3 utils/make_world.py bin/WORLD.8xv --preset random    # random boxes on a ground plane
 python3 utils/make_world.py bin/WORLD.8xv --preset dense     # worst case: every chunk nearly full
+python3 utils/make_world.py bin/TUTORIAL.8xv --preset tutorial --appvar TUTORIAL   # big and sparse:
+python3 utils/make_world.py bin/ISLANDS.8xv --preset islands --appvar ISLANDS      #   192 x 192 cells,
+python3 utils/make_world.py bin/PLAINS.8xv --preset plains --appvar PLAINS         #   a few features in view
 ```
+
+With no world on the calculator the game starts anyway: it says where to download one, and
+Play > New makes an empty one.
 
 A world is split into 8 x 8 cell chunk columns of up to 255 voxels each, with 16 materials (the
 palette colours, shaded per face). The file stores which faces of each voxel are exposed, so
@@ -143,10 +149,11 @@ compiler path to `CEdev/bin/ez80-clang` and the include path to `CEdev/include` 
 - [ ] Write runtime world changes back to the file
 - [x] Distance fog (on in every build)
 - [x] Use a scratch AppVar for more memory (bss is nearly full)
-- [ ] Add main menu (ideally with a world rendering in the background) with "Play", "Settings", and "Quit"
-- [ ] Add world menu, and let users select world to load
-- [ ] Add settings menu with render distance and FPS toggle
-- [ ] Remove draw time from HUD, add voxel count
+- [x] Add main menu (ideally with a world rendering in the background) with "Play", "Settings", and "Quit"
+- [x] Add world menu, and let users select world to load
+- [x] Add settings menu with render distance and FPS toggle
+- [x] Remove draw time from HUD, add voxel count
+- [x] Add pause menu
 
 ## Changelog
 

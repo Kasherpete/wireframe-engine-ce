@@ -26,8 +26,11 @@ extern int32_t  player_x, player_y, player_z;   // the eye
 #define FRAC_OF(v)  ((uint24_t)((const volatile uint16_t *)&(v))[0])
 extern uint24_t player_yaw;
 
-// at the world's spawn: the middle of the spawn cell, on the ground (or on top of what stands there)
+// at the world's spawn, or where "Save & Quit" left the player (world_header_t.saved): the
+// middle of that cell, on the ground (or on top of what stands there). At 0, 0 with no world open
 void playerSpawn(void);
+// "Save & Quit": hands the player's cell and yaw to worldSetPlayer, for worldClose(1)
+void playerSave(void);
 
 // Reads the keys and moves the player for dt clock ticks (CLOCKS_PER_SEC per second). Controls:
 // arrows walk and turn, [mode]/[del] strafe, [2nd] jump, [alpha] crouch

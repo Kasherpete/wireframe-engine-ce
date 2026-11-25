@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Builds a world AppVar (.8xv) for the engine: the file format that src/world.h describes.
 
-Usage: python3 utils/make_world.py [out.8xv] [--preset test|dense|random] [--name NAME]
+Usage: python3 utils/make_world.py [out.8xv] [--preset PRESET] [--name NAME]
                                    [--appvar WORLD] [--ram] [--bin out.bin]
 
-  --preset   test   (default) a 6 x 6 chunk world with features across chunk borders
-             dense  every chunk near the 255 voxel limit (benchmarks, worst case)
-             random random boxes of random size, colour and height scattered over the ground plane
+  --preset   test     (default) a 6 x 6 chunk world with features across chunk borders
+             dense    every chunk near the 255 voxel limit (benchmarks, worst case)
+             random   random boxes of random size, colour and height scattered over the ground plane
+             tutorial 24 x 24 chunks: a hub village, paths to a forest, a lake, a hill and a tower
+             islands  24 x 24 chunks of sea with small islands (huts, trees, a lighthouse)
+             plains   24 x 24 chunks of open grassland with far-apart landmarks
+             The last three are large but sparse (a few features in view at once), and stay
+             under BIG_WORLD_MAX bytes so Save & Quit can unarchive them in free RAM
   --appvar   the AppVar name on the calculator (the engine lists every AppVar starting with "VXWD", whatever its name)
   --ram      send it to RAM instead of the archive
   --bin      also write the raw AppVar contents
@@ -25,7 +30,12 @@ File format (all little endian, src/world.h has the same as C structs):
     36  2  spawn cell z (int16)
     38  1  spawn yaw (256 steps per turn, 0 looks along +z)
     39  1  ground plane material (0 .. 15), or 255: none
-    40  8  reserved, 0
+    40  1  1: a saved player position follows (written by the game's Save & Quit), 0: none
+    41  2  saved cell x (int16)
+    43  2  saved cell z (int16)
+    45  1  saved feet cell y (int8)
+    46  1  saved yaw (256 steps per turn)
+    47  1  reserved, 0
   chunk index, 4 bytes per chunk, chunk (cx, cz) at entry cz * size_x + cx
     0   2  offset of its records from the start of the file
     2   1  record count (0 .. 255): voxels and runs
@@ -351,20 +361,294 @@ def preset_random():
     return w
 
 
+# ---- the big, sparse worlds ----
+# Large in area, but with features far apart: from anywhere only a few are within the render
+# distance (24), so the box count stays near the test world's
+BIG = 24                # chunks per side: 192 x 192 cells
+BIG_WORLD_MAX = 30000   # bytes: Save & Quit unarchives the world, which needs that much free RAM
+
+DARK_BLUE, PURPLE, DARK_GREEN, BROWN, DARK_GREY = 1, 2, 3, 4, 5
+GREY, WHITE, RED, ORANGE, YELLOW, GREEN, BLUE, LAVENDER, PINK, SAND = 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+
+
+def house(w, x0, z0, wd, dp, h=3, wall=ORANGE, roof=PURPLE, door="-z", base=0):
+    """walls h high around [x0, x0 + wd) x [z0, z0 + dp) standing on y = base, a 2-high door in
+    the middle of one side ("-z", "+z", "-x", "+x"), a flat roof"""
+    x1, z1 = x0 + wd - 1, z0 + dp - 1
+    for y in range(base - 1, base - h - 1, -1):
+        w.box(x0, x1, y, y, z0, z0, wall)
+        w.box(x0, x1, y, y, z1, z1, wall)
+        w.box(x0, x0, y, y, z0, z1, wall)
+        w.box(x1, x1, y, y, z0, z1, wall)
+    dx, dz = {"-z": ((x0 + x1) // 2, z0), "+z": ((x0 + x1) // 2, z1),
+              "-x": (x0, (z0 + z1) // 2), "+x": (x1, (z0 + z1) // 2)}[door]
+    for y in (base - 1, base - 2):
+        w.cells.pop((dx, y, dz), None)
+    w.box(x0, x1, base - h - 1, base - h - 1, z0, z1, roof)
+
+
+def big_tree(w, x, z, height=4, base=0):
+    """a trunk on y = base and a 3 x 3 crown topped by a cross"""
+    for y in range(base - 1, base - height - 1, -1):
+        w.set(x, y, z, BROWN)
+    top = base - height - 1
+    w.box(x - 1, x + 1, top, top, z - 1, z + 1, GREEN)
+    for dx, dz in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+        w.set(x + dx, top - 1, z + dz, GREEN)
+
+
+def path(w, a, b, mat=SAND):
+    """a 1-wide path on the ground from cell a to cell b (along x, then along z)"""
+    (xa, za), (xb, zb) = a, b
+    for x in range(min(xa, xb), max(xa, xb) + 1):
+        w.cells.setdefault((x, 0, za), mat)
+    for z in range(min(za, zb), max(za, zb) + 1):
+        w.cells.setdefault((xb, 0, z), mat)
+
+
+def hill(w, cx, cz, radii, mats):
+    """a stepped hill: level k a square of half-size radii[k], one cell high"""
+    for level, r in enumerate(radii):
+        y = -1 - level
+        w.box(cx - r, cx + r, y, y, cz - r, cz + r, mats[min(level, len(mats) - 1)])
+
+
+def tower(w, cx, cz, r=2, h=8, wall=GREY, top=RED, battlements=True, base=0):
+    """a hollow square tower (walls r from the centre) on y = base, a door facing -z, a roof"""
+    for y in range(base - 1, base - h - 1, -1):
+        for i in range(-r, r + 1):
+            for x, z in ((cx + i, cz - r), (cx + i, cz + r), (cx - r, cz + i), (cx + r, cz + i)):
+                w.set(x, y, z, wall)
+    for y in (base - 1, base - 2):
+        w.cells.pop((cx, y, cz - r), None)
+    w.box(cx - r, cx + r, base - h - 1, base - h - 1, cz - r, cz + r, top)
+    if battlements:
+        for i in range(-r, r + 1, 2):
+            for x, z in ((cx + i, cz - r), (cx + i, cz + r), (cx - r, cz + i), (cx + r, cz + i)):
+                w.set(x, base - h - 2, z, wall)
+
+
+def scatter(rng, n, spacing, margin, avoid, jitter=None):
+    """cells on a jittered grid, spacing apart, margin from the edges, outside the circles in
+    avoid ((x, z, radius))"""
+    jitter = spacing // 3 if jitter is None else jitter
+    out = []
+    for gx in range(margin, n - margin, spacing):
+        for gz in range(margin, n - margin, spacing):
+            x, z = gx + rng.randint(-jitter, jitter), gz + rng.randint(-jitter, jitter)
+            if all((x - ax) ** 2 + (z - az) ** 2 > ar * ar for ax, az, ar in avoid):
+                out.append((x, z))
+    return out
+
+
+def preset_tutorial():
+    """24 x 24 chunks on grass: a village around a well in the middle, sand paths to four areas (a
+    forest to the north (+z), a lake to the east (+x), a stepped hill to the south, a tower and
+    ruins to the west), pillars in the corners and lone trees between. Spawn on the plaza, facing
+    the well and the forest path beyond"""
+    import random
+    rng = random.Random(1)
+    w = World(BIG, BIG, "Tutorial", ground=DARK_GREEN)
+    n, c = BIG * CHUNK, BIG * CHUNK // 2         # 192 cells, centre 96
+
+    # the plaza: a grey ring of tiles around a well with a roof
+    for x in range(c - 5, c + 6):
+        for z in range(c - 5, c + 6):
+            if max(abs(x - c), abs(z - c)) in (4, 5):
+                w.set(x, 0, z, GREY)
+    w.box(c - 1, c + 1, -1, -1, c - 1, c + 1, GREY)
+    w.cells.pop((c, -1, c), None)
+    w.set(c, 0, c, BLUE)
+    for dx, dz in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+        w.box(c + dx, c + dx, -3, -2, c + dz, c + dz, BROWN)
+    w.box(c - 1, c + 1, -4, -4, c - 1, c + 1, PURPLE)
+
+    # four houses on the diagonals, doors towards the plaza, and two lamps
+    house(w, c - 14, c - 14, 6, 5, door="+z")
+    house(w, c + 9, c - 14, 5, 6, wall=SAND, roof=RED, door="-x")
+    house(w, c - 14, c + 9, 5, 6, wall=SAND, roof=RED, door="+x")
+    house(w, c + 9, c + 10, 6, 5, door="-z")
+    for x, z in ((c - 8, c - 9), (c + 8, c + 9)):
+        w.box(x, x, -2, -1, z, z, YELLOW)
+
+    # the paths
+    path(w, (c, c + 6), (c, c + 40))
+    path(w, (c + 6, c), (c + 40, c))
+    path(w, (c, c - 6), (c, c - 40))
+    path(w, (c - 6, c), (c - 40, c))
+
+    # north: the forest, either side of the path's end
+    for x, z in scatter(rng, n, 7, 0, []):
+        if 2 < abs(x - c) < 30 and c + 44 <= z <= c + 80:
+            big_tree(w, x, z, rng.randint(3, 5))
+
+    # east: a lake with a sand shore, a jetty and a boat
+    lx, lz = c + 52, c
+    for x in range(lx - 9, lx + 10):
+        for z in range(lz - 9, lz + 10):
+            d = (x - lx) ** 2 + (z - lz) ** 2
+            if d <= 49:
+                w.set(x, 0, z, BLUE)
+            elif d <= 81:
+                w.set(x, 0, z, SAND)
+    w.box(lx - 9, lx - 3, -1, -1, lz, lz, BROWN)
+    w.box(lx, lx + 4, -1, -1, lz - 3, lz - 3, BROWN)
+    w.box(lx + 1, lx + 3, -1, -1, lz - 4, lz - 2, BROWN)
+    w.cells.pop((lx + 2, -1, lz - 3), None)
+
+    # south: a stepped hill with a flag on top
+    hx, hz = c, c - 54
+    hill(w, hx, hz, (6, 5, 4, 3, 2, 1, 0), (GREEN, GREEN, GREEN, GREY, GREY, WHITE))
+    w.box(hx, hx, -11, -8, hz, hz, BROWN)
+    w.box(hx + 1, hx + 2, -11, -10, hz, hz, RED)
+
+    # west: a tower, and ruined walls around it
+    tx, tz = c - 52, c
+    tower(w, tx, tz, r=2, h=9)
+    for i in range(-10, 11):
+        if rng.random() < 0.55:
+            w.box(tx + i, tx + i, -rng.randint(1, 3), -1, tz - 10, tz - 10, DARK_GREY)
+        if rng.random() < 0.55:
+            w.box(tx - 10, tx - 10, -rng.randint(1, 3), -1, tz + i, tz + i, DARK_GREY)
+
+    # the corners: tall coloured pillars, seen from afar
+    for (x, z), mat in zip(((16, 16), (n - 18, 16), (16, n - 18), (n - 18, n - 18)),
+                           (RED, YELLOW, PINK, LAVENDER)):
+        w.box(x, x + 1, -10, -1, z, z + 1, mat)
+
+    # lone trees and rocks elsewhere, off the paths
+    avoid = [(c, c, 20), (c, c + 62, 36), (lx, lz, 14), (hx, hz, 12), (tx, tz, 16)]
+    for x, z in scatter(rng, n, 16, 6, avoid):
+        if abs(x - c) <= 2 or abs(z - c) <= 2:
+            continue
+        if rng.random() < 0.8:
+            big_tree(w, x, z, rng.randint(3, 5))
+        else:
+            w.box(x, x + 1, -1, -1, z, z + rng.randint(0, 1), GREY)
+
+    w.spawn = (c, c - 8, 0)
+    return w
+
+
+def preset_islands():
+    """24 x 24 chunks of sea (the ground plane) with small sandy islands one cell high, on a
+    jittered grid 30 cells apart, each with a tree, a hut or a rock; a lighthouse island in the
+    middle, where the player starts. The sea can be walked on"""
+    import random
+    rng = random.Random(2)
+    w = World(BIG, BIG, "Islands", ground=DARK_BLUE)   # BLUE is the sky colour
+    n, c = BIG * CHUNK, BIG * CHUNK // 2
+
+    def island(cx, cz, r):
+        for x in range(cx - r, cx + r + 1):
+            for z in range(cz - r, cz + r + 1):
+                d = (x - cx) ** 2 + (z - cz) ** 2
+                if d <= r * r + r:
+                    w.set(x, -1, z, SAND if d > (r - 1.5) ** 2 else GREEN)
+
+    island(c, c, 6)
+    tower(w, c, c + 2, r=1, h=8, wall=WHITE, top=RED, battlements=False, base=-1)
+    w.set(c, -11, c + 2, YELLOW)
+    w.box(c, c, -1, -1, c - 12, c - 7, BROWN)             # a jetty to the south
+    for x, z in scatter(rng, n, 30, 12, [(c, c, 20)], jitter=7):
+        r = rng.randint(3, 5)
+        island(x, z, r)
+        k = rng.random()
+        if k < 0.5:
+            big_tree(w, x, z, rng.randint(3, 4), base=-1)
+        elif k < 0.75 and r >= 4:
+            house(w, x - 2, z - 2, 4, 4, h=2, wall=ORANGE, roof=RED, base=-1,
+                  door=rng.choice(("-z", "+z", "-x", "+x")))
+        else:
+            w.box(x, x + 1, -3, -2, z, z, GREY)
+    w.spawn = (c, c - 4, 0)
+    return w
+
+
+def preset_plains():
+    """24 x 24 chunks of open grass with far-apart landmarks: a stepped pyramid, a stone circle, a
+    ruined wall, a white tower, a pond, a field of dunes, lone trees; a camp at the spawn"""
+    import math
+    import random
+    rng = random.Random(3)
+    w = World(BIG, BIG, "Plains", ground=DARK_GREEN)
+    n, c = BIG * CHUNK, BIG * CHUNK // 2
+
+    # a stepped pyramid to the north-east
+    px, pz = c + 48, c + 48
+    hill(w, px, pz, (5, 4, 3, 2, 1, 0), (SAND, SAND, SAND, SAND, SAND, YELLOW))
+
+    # a stone circle with lintels to the north-west
+    sx, sz = c - 48, c + 44
+    stones = [(round(sx + 7 * math.cos(2 * math.pi * k / 12)),
+               round(sz + 7 * math.sin(2 * math.pi * k / 12))) for k in range(12)]
+    for k, (x, z) in enumerate(stones):
+        w.box(x, x, -3, -1, z, z, GREY)
+        if k % 2 == 0:                  # a lintel on each pair of stones
+            w.set(x, -4, z, GREY)
+            w.set(stones[k + 1][0], -4, stones[k + 1][1], GREY)
+    w.box(sx, sx, -1, -1, sz - 1, sz + 1, DARK_GREY)
+
+    # a ruined wall across the south
+    for x in range(c - 30, c + 30):
+        if rng.random() < 0.7:
+            w.box(x, x, -rng.randint(1, 3), -1, c - 50, c - 50, DARK_GREY)
+
+    # a white tower to the east, a pond to the west
+    tower(w, c + 60, c - 10, r=2, h=10, wall=WHITE, top=RED)
+    qx, qz = c - 56, c - 12
+    for x in range(qx - 6, qx + 7):
+        for z in range(qz - 6, qz + 7):
+            if (x - qx) ** 2 + (z - qz) ** 2 <= 30:
+                w.set(x, 0, z, BLUE)
+
+    # low sand dunes in the far south-east
+    for x, z in scatter(rng, n, 9, 0, []):
+        if x > c + 40 and z < c - 40:
+            w.box(x, x + 2, -1, -1, z, z + 1, SAND)
+            if rng.random() < 0.4:
+                w.set(x + 1, -2, z, SAND)
+
+    # the camp at the spawn: a fire and two tents
+    w.set(c, 0, c + 3, ORANGE)
+    w.set(c, -1, c + 3, RED)
+    for tx in (c - 4, c + 3):
+        w.box(tx, tx + 1, -1, -1, c + 6, c + 8, WHITE)
+        w.box(tx, tx + 1, -2, -2, c + 6, c + 8, LAVENDER)
+
+    # lone trees and bushes
+    avoid = [(c, c, 12), (px, pz, 10), (sx, sz, 12), (c + 60, c - 10, 8), (qx, qz, 10)]
+    for x, z in scatter(rng, n, 18, 6, avoid):
+        if x > c + 36 and z < c - 36:
+            continue
+        if rng.random() < 0.7:
+            big_tree(w, x, z, rng.randint(3, 6))
+        else:
+            w.box(x, x + 1, -1, -1, z, z + 1, GREEN)
+    w.spawn = (c, c, 0)
+    return w
+
+
+PRESETS = {"test": preset_test, "dense": preset_dense, "random": preset_random,
+           "tutorial": preset_tutorial, "islands": preset_islands, "plains": preset_plains}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("out", nargs="?", default="bin/WORLD.8xv")
-    ap.add_argument("--preset", default="test", choices=("test", "dense", "random"))
+    ap.add_argument("--preset", default="test", choices=tuple(PRESETS))
     ap.add_argument("--name")
     ap.add_argument("--appvar", default="WORLD")
     ap.add_argument("--ram", action="store_true")
     ap.add_argument("--bin")
     a = ap.parse_args()
 
-    w = {"test": preset_test, "dense": preset_dense, "random": preset_random}[a.preset]()
+    w = PRESETS[a.preset]()
     if a.name:
         w.name = a.name
     data, chunks = w.pack()
+    if w.size_x >= BIG:
+        assert len(data) <= BIG_WORLD_MAX, f"{len(data)} bytes: too big for Save & Quit"
     with open(a.out, "wb") as f:
         f.write(to_8xv(data, a.appvar, not a.ram))
     if a.bin:

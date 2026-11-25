@@ -2,7 +2,7 @@
 # Run a build in CEmu and take screenshots, without touching your CEmu config.
 #
 # Usage: utils/run_cemu.sh [program.8xp] [out_dir]
-#   defaults: bin/DEMOPRGM.8xp, /tmp/cemu_run
+#   defaults: bin/CALCRAFT.8xp, /tmp/cemu_run
 #   KEYS='"key|right","delay|500"'  extra autotester sequence items after launch
 #   SHOTS=12                        number of screenshots (one every 2 s)
 #   FILES="a.8xv b.8xv"             other files to send (default: bin/WORLD.8xv, the world)
@@ -14,7 +14,7 @@
 # timing relative to the screenshots is loose. dbg_printf output is not captured.
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PRG="$(realpath "${1:-$ROOT/bin/DEMOPRGM.8xp}")"
+PRG="$(realpath "${1:-$ROOT/bin/CALCRAFT.8xp}")"
 OUT="$(realpath -m "${2:-/tmp/cemu_run}")"
 ROM="${CEMU_ROM:-$HOME/Downloads/ROM_IMAGE_2.rom}"
 CLIBS="${CEMU_CLIBS:-$HOME/Downloads/clibs.8xg}"

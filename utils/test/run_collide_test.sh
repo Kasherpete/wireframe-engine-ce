@@ -14,6 +14,7 @@ grep -q test_keys "$OUT/src/player.c"
 python3 "$ROOT/utils/make_world.py" "$OUT/WORLD.8xv" --preset "${WORLD:-test}"
 echo "CFLAGS += -DPROFILE=1" >> "$OUT/makefile"
 (cd "$OUT" && make -j4 build 2>&1 | grep -iE "warning|error" || true)
-test -f "$OUT/bin/DEMOPRGM.8xp"
-FILES="$OUT/WORLD.8xv" SHOTS=${SHOTS:-12} "$ROOT/utils/run_cemu.sh" "$OUT/bin/DEMOPRGM.8xp" "$OUT/shots" > /dev/null
+PRG="$OUT/bin/$(sed -n "s/^NAME = //p" "$ROOT/makefile").8xp"
+test -f "$PRG"
+FILES="$OUT/WORLD.8xv" SHOTS=${SHOTS:-12} "$ROOT/utils/run_cemu.sh" "$PRG" "$OUT/shots" > /dev/null
 ls "$OUT"/shots/t*.png

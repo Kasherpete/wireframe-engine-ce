@@ -201,7 +201,8 @@ int main(void) {
     run_dist = BENCH_RUN_DIST;
 #endif
     if (!windowAlloc()) return 0;
-    if (!worldStart()) {
+    if (worldStart() != WORLD_OK) {
+        displayError("No usable world", NULL);
         windowFree();
         return 0;
     }

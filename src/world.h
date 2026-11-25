@@ -56,7 +56,12 @@ typedef struct {
     int16_t      spawn_x, spawn_z; // spawn cell
     uint8_t      spawn_yaw;        // 256 steps per turn, 0 looks along +z
     uint8_t      ground;           // material of the ground plane (y >= 0), or WORLD_NO_GROUND
-    uint8_t      reserved[8];
+    // where the player was at the last "Save & Quit" (reserved bytes in older files: 0, none)
+    uint8_t      saved;            // 1: the fields below hold a position
+    int16_t      saved_x, saved_z; // cell
+    int8_t       saved_feet;       // the cell of the feet (y grows downward)
+    uint8_t      saved_yaw;        // 256 steps per turn
+    uint8_t      reserved;
 } world_header_t;
 
 // world_chunk_t.runs
@@ -109,13 +114,16 @@ uint8_t worldSelect(uint8_t i);
 // a short message for a worldOpen() error
 const char *worldError(uint8_t err);
 // Before graphx starts: worldScan, then opens the most recently played world that passes the
-// checks. If none does, it says so on the home screen, waits for a key and returns 0
+// checks. WORLD_OK, or the first world's error (WORLD_MISSING if there is none: world_count 0);
+// then no world is open (world NULL) and the title says so
 uint8_t worldStart(void);
 // the records of chunk (cx, cz), their number in *count and their run orientation in *runs (as
 // world_chunk_t). NULL, 0 and WORLD_RUNS_NONE outside the world
 const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count, uint8_t *runs);
-// Closes the world. With save, first stores the current date and time as last played and updates
-// the checksum (only for a world that was played, not one only seen behind the title). An archived world is moved to RAM for that and archived again, which needs free RAM the size of
+// "Save & Quit": the position worldClose(1) stores in the header (playerSave in player.c)
+void worldSetPlayer(int16_t x, int16_t z, int8_t feet, uint8_t yaw);
+// Closes the world. With save, first stores the current date and time as last played (and the
+// position of worldSetPlayer, if it was called) and updates the checksum (only for a world that was played, not one only seen behind the title). An archived world is moved to RAM for that and archived again, which needs free RAM the size of
 // the world (otherwise the date is left as it was). Call it after gfx_End(): archiving may run a
 // garbage collection, which shows its own screen. Returns 0 if the date could not be saved
 uint8_t worldClose(uint8_t save);

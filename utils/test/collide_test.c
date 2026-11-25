@@ -60,7 +60,8 @@ static void num(uint8_t x, uint8_t y, const char *s, int24_t v) {
 
 int main(void) {
     if (!windowAlloc()) return 0;
-    if (!worldStart()) {
+    if (worldStart() != WORLD_OK) {
+        displayError("No usable world", NULL);
         windowFree();
         return 0;
     }

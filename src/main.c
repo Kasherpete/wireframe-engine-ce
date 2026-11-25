@@ -1,5 +1,7 @@
 // Voxel engine demo: a title screen (settings, a world list), then walk around the chosen world
-// (world.h: any AppVar starting with WORLD_MAGIC). [clear] quits.
+// (world.h: any AppVar starting with WORLD_MAGIC). [clear] opens the pause menu (title.h), which
+// resumes or quits, with or without saving the position. With no world at startup the title
+// says where to get one, over a black screen.
 //
 // A frame: move the player, set up the camera, load chunks that came into view, project and
 // rasterize the scene (before the wait: none of it touches a frame buffer, so it overlaps the LCD
@@ -39,14 +41,16 @@ int main(void) {
     if (!windowAlloc()) {
         return 0;
     }
-    if (!worldStart()) {
-        windowFree();
-        return 0;
+    const uint8_t start_err = worldStart();
+    if (start_err != WORLD_OK) {
+        titleNoWorld(world_count ? worldError(start_err) : NULL);   // world stays NULL
     }
     coloursInit();
     playerSpawn();              // the title screen first, from the spawn; [play] spawns again
     uint8_t title = 1;
-    uint8_t played = 0;         // a world was played: its last played date is saved at exit
+    uint8_t paused = 0;         // the pause menu over the frozen world
+    uint8_t save = 0;           // Save & Quit: the date and the position are saved at exit
+    uint8_t clear_last = 0;     // [clear] was down last frame (a held one pauses once)
 
     hudInit();
     displayInit();
@@ -54,8 +58,10 @@ int main(void) {
     cameraInit();
     sceneInit();
     windowInit();
-    setupCamera();
-    windowFollow();
+    if (world) {
+        setupCamera();
+        windowFollow();
+    }
     displayProgress(LOADING_FULL);
 
     // FPS calculation
@@ -91,10 +97,19 @@ int main(void) {
             start_time = now;
         }
 
-        if (title) {
+        if (title || paused) {
             const uint8_t choice = titleUpdate(dt);
             if (choice == TITLE_QUIT) {
                 break;
+            }
+            if (choice == TITLE_SAVE_QUIT) {
+                save = 1;
+                playerSave();
+                break;
+            }
+            if (choice == TITLE_RESUME) {
+                paused = 0;
+                clear_last = kb_Data[6] & kb_Clear;     // [clear] resumed: not a pause again
             }
             if (choice == TITLE_PLAY) {
                 // another world than the one behind the title: the loading screen while it is
@@ -115,24 +130,33 @@ int main(void) {
                 if (err == WORLD_OK) {
                     playerSpawn();
                     title = 0;
-                    played = 1;
+                    clear_last = kb_Data[6] & kb_Clear;
                 }
             }
         } else {
-            if (kb_Data[6] & kb_Clear) {
-                break;
+            const uint8_t clear = kb_Data[6] & kb_Clear;
+            if (clear && !clear_last) {
+                paused = 1;
+                titlePause();
+            } else {
+                playerUpdate(dt);
             }
-            playerUpdate(dt);
+            clear_last = clear;
         }
-        setupCamera();
-        windowFollow();
+        const uint8_t menu = title || paused;
+        if (world) {
+            setupCamera();
+            windowFollow();
+        }
         if (loading) {
             displayProgress(LOADING_FULL);
         }
 
         // cull, project and rasterize before the wait (fill.h: unless the span list overflows)
-        projectScene(draw_buffer_ctrl);
-        if (title) {
+        if (world) {
+            projectScene(draw_buffer_ctrl);
+        }
+        if (menu) {
             titlePoll();
         }
 
@@ -140,21 +164,28 @@ int main(void) {
         uint24_t wait_cycles = CYCLES();
         waitForBufferScan();
         wait_cycles = CYCLES() - wait_cycles;
-        if (title) {
+        if (menu) {
             titlePoll();
         }
 
-        // every viewport pixel of the field: the visible parts of the boxes and the background
-        drawSpans();
-
         // copy the drawn rows to the rows below (all of them under the menu text), and show the frame
-        if (title) {
+        if (!world) {
+            // no world (only on the title): black, the even rows, then copied down
+            gfx_SetColor(0x00);
+            gfx_FillRectangle(0, 0, GFX_LCD_WIDTH, GFX_LCD_HEIGHT);
+            titleDraw();
+            deinterlaceRows((uint8_t *)draw_buffer_ctrl, GFX_LCD_WIDTH);
+        } else if (menu) {
+            // every viewport pixel of the field: the visible parts of the boxes and the background
+            drawSpans();
             titleDraw();
             deinterlaceFrame(GFX_LCD_HEIGHT);
         } else if (hud_shown) {
+            drawSpans();
             hudDraw(fps, num_projected, frame_cycles);
             deinterlaceFrame(HUD_ROWS);
         } else {
+            drawSpans();
             deinterlaceFrame(0);
         }
         swapBuffer();
@@ -166,12 +197,13 @@ int main(void) {
         frame_cycles = CYCLES() - frame_start - wait_cycles;
     }
 
-    // The world's last played date last (only if it was played, not just seen behind the title): archiving it may show the OS garbage collection screen,
-    // and it needs free RAM, so a scratch AppVar (the bench's, or an older version's) goes first
+    // The world's last played date and the player's position last (only on Save & Quit): archiving
+    // it may show the OS garbage collection screen, and it needs free RAM, so a scratch AppVar (the
+    // bench's, or an older version's) goes first
     kb_SetMode(kb_mode);
     gfx_End();
     windowFree();
-    worldClose(played);
+    worldClose(save);
     worldArchivePending();      // worlds renamed or created on the title
     return 0;
 }
