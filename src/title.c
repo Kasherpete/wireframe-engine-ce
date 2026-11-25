@@ -305,6 +305,9 @@ static uint8_t worldsUpdate(uint8_t pressed, uint8_t released) {
             selected--;
         } else if (pressed & KEY_DOWN) {
             selected = selected + 1 < world_count ? selected + 1 : world_count + bottom;
+        } else if (pressed & KEY_RIGHT) {
+            selected = world_count + bottom;    // to the buttons, keeping this world for Rename
+            list_error = NULL;
         }
         if (selected < world_count && selected != list_sel) {
             list_sel = selected;
