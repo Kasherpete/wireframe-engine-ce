@@ -81,7 +81,8 @@ static int32_t fillSlope(int24_t dx, int24_t dy) {
         return 0;  // a one row edge is only evaluated at its start
     }
     const uint32_t a = dx < 0 ? -dx : dx;
-    const uint32_t r = recipTable[dy];
+    // past the table: the same value, as fill.S's .Lrecip_long computes it
+    const uint32_t r = dy < RECIP_TABLE_LEN ? recipTable[dy] : ((1UL << 24) + dy / 2) / dy;
     const int32_t s = (int32_t)(a * (r >> 8) + ((a * (r & 0xff)) >> 8));
     return dx < 0 ? -s : s;
 }

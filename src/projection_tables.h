@@ -10,23 +10,23 @@
 #define TABLE_RENDER_DIST   24
 #define TABLE_NEAR_PLANE    23
 #define TABLE_FAR_PLANE     3072
-#define TABLE_LOG_STEPS     256
+#define TABLE_LOG_STEPS     128
 #define TABLE_FOCAL_LOG2    6
 #define LOG_TABLE_LEN       4021
-#define EXP_TABLE_MIN       -3766
-#define EXP_TABLE_LEN       4856
+#define EXP_TABLE_MIN       -1883
+#define EXP_TABLE_LEN       2429
 #define SIN_TABLE_LEN       256
-#define SCREEN_COORD_MAX    1221
-#define RECIP_TABLE_LEN     2443
+#define SCREEN_COORD_MAX    1224
+#define RECIP_TABLE_LEN     256
 
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 // round(TABLE_SUBUNITS * sin(2 pi a / SIN_TABLE_LEN))
 extern const int24_t sinTable[SIN_TABLE_LEN];
-// 3 * round(256 * log2(v)), v in 1/TABLE_SUBUNITS units. x3 so that the difference of two
+// 3 * round(128 * log2(v)), v in 1/TABLE_SUBUNITS units. x3 so that the difference of two
 // entries is a byte offset into expTable. [0] makes a = 0 project to 0
 extern const int24_t logTable[LOG_TABLE_LEN];
-// round(TABLE_FOCAL_LENGTH * 2^(d / 256)), d = index + EXP_TABLE_MIN. Covers every d that
+// round(TABLE_FOCAL_LENGTH * 2^(d / 128)), d = index + EXP_TABLE_MIN. Covers every d that
 // survives the culling in project.S (proved by the asserts in gen_tables.py): no range check needed
 extern const int24_t expTable[EXP_TABLE_LEN];
 // round(2^24 / dx) for dx = 2 .. 2 SCREEN_COORD_MAX: edge slopes without a division (fill.S)

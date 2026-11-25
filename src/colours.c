@@ -2,6 +2,9 @@
 #include "colours.h"
 #include "world.h"
 
+// Not per-box code: built for size (CLAUDE.md, "Memory"). Saves ~15 KB of RAM over -O3 inlining
+#pragma clang attribute push (__attribute__((minsize)), apply_to = function)
+
 const uint8_t palette[32] = {
     0x00, 0x00, /*   0: rgb(  0,   0,   0) */
     0xaa, 0x90, /*   1: rgb( 33,  45,  82) */
@@ -54,3 +57,5 @@ void coloursInit(void) {
     ground_colour3 = g * (uint24_t)0x010101;
     bg_dither3 = (uint8_t)((g & 0xf0) | FOG) * (uint24_t)0x010101;
 }
+
+#pragma clang attribute pop

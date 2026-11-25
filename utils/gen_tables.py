@@ -33,9 +33,9 @@ RENDER_DIST = 24        # largest far plane, in world units (GRID_RANGE). The 7 
 # = d / 1.6008 deep where the view's side edge meets it, so 0.3 / 1.6008 = 0.1874 is the most that
 # never clips a wall the player stands against (camera.c asserts it): 23 / 128 = 0.1797
 NEAR_PLANE = 23
-LOG_STEPS = 256         # log table resolution: steps per doubling (0.27% per step)
+LOG_STEPS = 128         # log table resolution: steps per doubling (0.54% per step; 256 was 7 KB more)
 SIN_STEPS = 256         # yaw angles per full turn
-LOG_ZERO = -800         # logTable[0]: low enough that a = 0 always projects to offset 0
+LOG_ZERO = -400         # logTable[0]: low enough that a = 0 always projects to offset 0
 
 FAR_PLANE = RENDER_DIST * SUBUNITS
 
@@ -102,7 +102,12 @@ def main():
     # The fill rasterizer (fill.S) turns an edge into a per-column slope S = dy * 256 / dx with
     # recipTable[dx] = round(2^24 / dx) instead of a division (see fill.S). [0] and [1] are unused
     coord_max = exp_table[-1]
-    recip_len = 2 * coord_max + 1
+    # Only dy < 256: a taller edge (a face close to the camera, a few a frame) is divided in fill.S
+    # (.Lrecip_long, ~1k cycles). The whole range, 2 * coord_max + 1 entries, was 7.3 KB
+    recip_len = 256
+    assert all(rnd(2 ** 24 / d) == ((1 << 24) + d // 2) // d ==
+               ((1 << 24) - (d + 1) // 2) // d + 1 for d in range(recip_len, 2 * coord_max + 1)), \
+        "fill.S .Lrecip_long must give recipTable's values past its end"
     recip_table = [0, 0] + [rnd(2 ** 24 / dx) for dx in range(2, recip_len)]
     assert max(recip_table) <= 2 ** 23, "recipTable entries must have a top byte <= 0x80 (fill.S)"
 

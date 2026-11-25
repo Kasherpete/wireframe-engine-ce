@@ -21,6 +21,9 @@
 #include "title.h"
 #include "world.h"
 
+// Not per-box code: built for size (CLAUDE.md, "Memory"). Saves ~15 KB of RAM over -O3 inlining
+#pragma clang attribute push (__attribute__((minsize)), apply_to = function)
+
 #define MAX_DT  (CLOCKS_PER_SEC / 8)  // clamp the frame time so a stall does not teleport the player
 
 int main(void) {
@@ -107,6 +110,7 @@ int main(void) {
                 playerSave();
                 break;
             }
+            uint8_t start = choice == TITLE_START;      // after the low memory notice
             if (choice == TITLE_RESUME) {
                 paused = 0;
                 clear_last = kb_Data[6] & kb_Clear;     // [clear] resumed: not a pause again
@@ -128,16 +132,27 @@ int main(void) {
                     }
                 }
                 if (err == WORLD_OK) {
+                    // the game takes most of the RAM: a large archived world may not fit to be
+                    // saved. Say so first (from its spawn behind the notice), then play it anyway
+                    uint24_t need, avail;
                     playerSpawn();
-                    title = 0;
-                    clear_last = kb_Data[6] & kb_Clear;
+                    if (worldCanSave(&need, &avail)) {
+                        start = 1;
+                    } else {
+                        titleLowMemory(need, avail);
+                    }
                 }
+            }
+            if (start) {
+                playerSpawn();
+                title = 0;
+                clear_last = kb_Data[6] & kb_Clear;
             }
         } else {
             const uint8_t clear = kb_Data[6] & kb_Clear;
             if (clear && !clear_last) {
                 paused = 1;
-                titlePause();
+                titlePause(worldCanSave(NULL, NULL));
             } else {
                 playerUpdate(dt);
             }
@@ -203,7 +218,12 @@ int main(void) {
     kb_SetMode(kb_mode);
     gfx_End();
     windowFree();
-    worldClose(save);
+    if (!worldClose(save) && save) {
+        // not enough free RAM to move the archived world to RAM (worldCanSave)
+        displayError("Not saved: not enough", "free RAM for this world.");
+    }
     worldArchivePending();      // worlds renamed or created on the title
     return 0;
 }
+
+#pragma clang attribute pop

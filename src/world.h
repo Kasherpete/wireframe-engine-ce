@@ -120,11 +120,18 @@ uint8_t worldStart(void);
 // the records of chunk (cx, cz), their number in *count and their run orientation in *runs (as
 // world_chunk_t). NULL, 0 and WORLD_RUNS_NONE outside the world
 const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count, uint8_t *runs);
+// Saving (worldClose(1)) and renaming move an archived world to RAM, which needs its size in free
+// RAM (plus WORLD_RAM_MARGIN for the OS). The game itself takes most of the RAM while it runs, so
+// a large world may not fit: then they do nothing rather than let the OS stop the program with
+// ERR:MEMORY. worldCanSave: whether the open world can be saved now; *need gets the free RAM that
+// takes (0 if the world is in RAM already) and *avail the free RAM (either may be NULL)
+#define WORLD_RAM_MARGIN 256
+uint8_t worldCanSave(uint24_t *need, uint24_t *avail);
 // "Save & Quit": the position worldClose(1) stores in the header (playerSave in player.c)
 void worldSetPlayer(int16_t x, int16_t z, int8_t feet, uint8_t yaw);
 // Closes the world. With save, first stores the current date and time as last played (and the
 // position of worldSetPlayer, if it was called) and updates the checksum (only for a world that was played, not one only seen behind the title). An archived world is moved to RAM for that and archived again, which needs free RAM the size of
-// the world (otherwise the date is left as it was). Call it after gfx_End(): archiving may run a
+// the world (otherwise nothing is saved and it returns 0). Call it after gfx_End(): archiving may run a
 // garbage collection, which shows its own screen. Returns 0 if the date could not be saved
 uint8_t worldClose(uint8_t save);
 

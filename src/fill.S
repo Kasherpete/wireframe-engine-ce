@@ -61,6 +61,8 @@
 ; is add a, c / adc hl, de. The slope dx * 65536 / dy is (|dx| recipTable[dy]) >> 8, with
 ; recipTable[dy] = round(2^24 / dy): mlt instead of a division (3 of them when |dx| < 256, 6
 ; otherwise), and none for a vertical edge (dx = 0, two of every side face) or a one row edge.
+; recipTable stops at RECIP_TABLE_LEN (256): an edge of more rows (only faces close to the camera,
+; a few a frame) gets the same value from .Lrecip_long, a 24-step division (~1k cycles).
 ; It drifts by under 0.05 px over the longest possible edge. An edge entered at a later row first
 ; jumps there by shift and add. x outside 0 .. 255 is clamped, but only an edge with an end outside
 ; that range (in a box with one) runs the clamping loop: x lies between the ends. Anything from
@@ -171,6 +173,7 @@
 #define L_CNT		186		/* run: vertices left to look at */
 #define L_I		187		/* run: entry offset of the vertex looked at */
 #define L_NEARB		188		/* AXIS: the FACE_* bit of the near face (a rectangle), else 0 */
+#define L_RV		189		/* round(2^24 / dy) for dy past recipTable (.Lrecip_long) */
 #define P_LOD		192		/* lod_slot[64], written by sceneInit (scene.c) */
 #define V(o)		ix + o - 128
 #if RUN_POINTS != 9 || RUN_SLOT_POINTS != 4 || RUN_SLOT2_POINTS != 8 || 9 * RUN_POINTS > P_MAT
@@ -1208,13 +1211,20 @@ _fillBoxes:
 	or	a, b			; dy < 2^16: a = 0 if dy = 1
 	jr	z, .Lflat		; one row: only evaluated at its start
 	push	hl
+	ld	a, b
+	or	a, a
+	jr	nz, 3f			; dy >= 256 = RECIP_TABLE_LEN: past the table
 	push	bc
 	pop	hl
 	add	hl, hl
 	add	hl, bc
 	ld	de, _recipTable
 	add	hl, de
-	ld	(V(L_RP)), hl
+	jr	4f
+3:	call	.Lrecip_long
+	ld	(V(L_RV)), hl
+	lea	hl, V(L_RV)
+4:	ld	(V(L_RP)), hl
 	pop	hl
 	call	.Lslope			; de = integer part, c = fraction
 	jr	2f
@@ -1270,6 +1280,43 @@ _fillBoxes:
 	ld	ix, .Lpage + 128
 	ret
 
+
+; ---- round(2^24 / dy) for bc = dy, 256 .. 65535 (the value recipTable would hold), in hl.
+; round(2^24 / dy) = floor((2^24 + floor(dy / 2)) / dy) = floor((2^24 - ceil(dy / 2)) / dy) + 1,
+; whose dividend fits 24 bits. Restoring division, the quotient shifted into the dividend.
+; Keeps bc. Clobbers a, de
+.Lrecip_long:
+	ld	hl, 1
+	add	hl, bc
+	srl	h
+	rr	l			; ceil(dy / 2), < 2^15
+	ex	de, hl
+	or	a, a
+	sbc	hl, hl
+	sbc	hl, de			; 2^24 - ceil(dy / 2)
+	ld	de, 0			; the remainder
+	ld	a, 24
+1:	add	hl, hl			; the next dividend bit into carry
+	ex	de, hl
+	adc	hl, hl			; remainder < 2 dy < 2^17: no carry out
+	sbc	hl, bc
+	jr	nc, 2f
+	add	hl, bc			; less than dy: restore, quotient bit 0
+	ex	de, hl
+	dec	a
+	jr	nz, 1b
+	inc	hl
+	ret
+2:	ex	de, hl
+	inc	l			; quotient bit 1 (bit 0 was cleared by the shift)
+	dec	a
+	jr	nz, 1b
+	inc	hl
+	ret
+
+#if RECIP_TABLE_LEN != 256
+#error "fill.S: dy >= 256 (b != 0) goes past recipTable"
+#endif
 
 ; ---- slope: hl = dx (|dx| <= 2 SCREEN_COORD_MAX, not 0), L_RP -> recipTable[dy], dy >= 2.
 ; out: de = integer part, c = fraction (8 bits) of dx * 65536 / dy = (|dx| recipTable[dy]) >> 8

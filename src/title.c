@@ -13,6 +13,9 @@
 #include "title_font.h"
 #include "world.h"
 
+// Not per-box code: built for size (CLAUDE.md, "Memory"). Saves ~15 KB of RAM over -O3 inlining
+#pragma clang attribute push (__attribute__((minsize)), apply_to = function)
+
 #define BUTTONS    3
 #define BUTTON_X   40           // logical pixels (160 x 120)
 #define BUTTON_W   80
@@ -69,6 +72,7 @@ static uint8_t splash_ready = 0;
 #define SCREEN_WORLDS    2
 #define SCREEN_NAME      3      // typing a world name (rename, or a new world)
 #define SCREEN_NOWORLD   4      // no world could be opened: where to get one, Continue
+#define SCREEN_LOWMEM    5      // the chosen world cannot be saved: Continue plays it
 
 static const char *const labels[BUTTONS] = {"Play", "Settings", "Quit"};
 static uint8_t screen = SCREEN_MAIN;
@@ -86,6 +90,8 @@ static const char *const pause_labels[PAUSE_BUTTONS] = {
     "Back to Game", "Settings", "Save & Quit", "Quit Without Saving"
 };
 static uint8_t paused = 0;
+static uint8_t pause_can_save = 1;
+static uint24_t lowmem_need, lowmem_avail;      // bytes
 // kb_Data[1 .. 7] at the last titlePoll, and the keys pressed and released since titleUpdate took
 // them (main waits for [2nd]/[enter] to be released first)
 #define KEY_GROUPS  7
@@ -215,8 +221,16 @@ void titleNoWorld(const char *reason) {
     noworld_reason = reason;
 }
 
-void titlePause(void) {
+void titleLowMemory(uint24_t need, uint24_t avail) {
+    screen = SCREEN_LOWMEM;
+    selected = 0;
+    lowmem_need = need;
+    lowmem_avail = avail;
+}
+
+void titlePause(uint8_t can_save) {
     paused = 1;
+    pause_can_save = can_save;
     screen = SCREEN_MAIN;
     selected = PAUSE_RESUME;
     armed = 0;
@@ -385,6 +399,15 @@ uint8_t titleUpdate(uint24_t dt) {
         armed = 0;
     }
 
+    if (screen == SCREEN_LOWMEM) {
+        if (pressed & KEY_BACK) {
+            openWorlds(chosen_world);
+        } else if (released & KEY_CHOOSE) {
+            openScreen(SCREEN_MAIN, 0);     // shown again when the title comes back
+            return TITLE_START;
+        }
+        return TITLE_STAY;
+    }
     if (screen == SCREEN_NOWORLD) {
         if ((released & KEY_CHOOSE) || (pressed & KEY_BACK)) {
             openScreen(SCREEN_MAIN, 0);
@@ -760,6 +783,7 @@ static void drawName(void) {
 #define PAUSE_W       120
 #define PAUSE_Y0      38
 #define PAUSE_DY      18
+#define PAUSE_NOTE_Y  111       // under the buttons
 
 static void drawPause(void) {
     printShadowed("Game Paused", centredX("Game Paused"), PAUSE_HEAD_Y, TITLE_COLOUR);
@@ -767,11 +791,33 @@ static void drawPause(void) {
         drawButton(PAUSE_X, PAUSE_Y0 + i * PAUSE_DY, PAUSE_W, pause_labels[i],
                    buttonColour(i == selected));
     }
+    if (!pause_can_save) {
+        pico8Centred("not enough free ram to save", PAUSE_NOTE_Y, SPLASH_COLOUR);
+    }
+}
+
+// the chosen world cannot be saved (worldCanSave): it can still be played
+#define LOWMEM_Y    30
+#define CONTINUE_Y  76         // the Continue button of the notice screens
+
+static void drawLowMemory(void) {
+    drawHeading("Low Memory");
+    char text[TEXT_MAX];
+    char *p = putStr(text, "saving this world needs ");
+    p = putUInt(p, (lowmem_need + 1023) / 1024);
+    putStr(p, " kb");
+    pico8Centred(text, LOWMEM_Y, TEXT_COLOUR);
+    p = putStr(text, "of free ram, and ");
+    p = putUInt(p, lowmem_avail / 1024);
+    putStr(p, " kb is free.");
+    pico8Centred(text, LOWMEM_Y + LINE_DY, TEXT_COLOUR);
+    pico8Centred("you can still play it, but", LOWMEM_Y + 3 * LINE_DY, SPLASH_COLOUR);
+    pico8Centred("save & quit will not save.", LOWMEM_Y + 4 * LINE_DY, SPLASH_COLOUR);
+    drawButton(BUTTON_X, CONTINUE_Y, BUTTON_W, "Continue", SELECTED_COLOUR);
 }
 
 // no world: where to get one (PICO-8 text, lowercase shows as capitals)
 #define NOWORLD_Y   34
-#define CONTINUE_Y  76
 
 static void drawNoWorld(void) {
     drawHeading("No World Found");
@@ -859,6 +905,8 @@ void titleDraw(void) {
         drawPause();
     } else if (screen == SCREEN_NOWORLD) {
         drawNoWorld();
+    } else if (screen == SCREEN_LOWMEM) {
+        drawLowMemory();
     } else if (screen == SCREEN_SETTINGS) {
         drawSettings();
     } else if (screen == SCREEN_WORLDS) {
@@ -867,3 +915,5 @@ void titleDraw(void) {
         drawName();
     }
 }
+
+#pragma clang attribute pop

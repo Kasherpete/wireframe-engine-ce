@@ -8,6 +8,9 @@
 #include "engine.h"
 #include "fill.h"
 
+// Not per-box code: built for size (CLAUDE.md, "Memory"). Saves ~15 KB of RAM over -O3 inlining
+#pragma clang attribute push (__attribute__((minsize)), apply_to = function)
+
 _Static_assert(SPAN_LIST == DBL_BUF1 && SPAN_LIST_END == DBL_BUF2, "fill.h span list is not DBL_BUF1");
 _Static_assert(SCREEN_OFFSET == VIEW_X0 && SCREEN_OFFSET + VIEWPORT_LENGTH == VIEW_X1, "engine.h viewport out of sync");
 _Static_assert(GFX_LCD_HEIGHT == VIEW_H && GFX_WIDTH_HALF == CENTRE_X && GFX_HEIGHT_HALF == CENTRE_Y, "engine.h screen out of sync");
@@ -192,3 +195,5 @@ void displayError(const char *line1, const char *line2) {
     while (!os_GetCSC()) {
     }
 }
+
+#pragma clang attribute pop

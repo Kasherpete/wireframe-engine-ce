@@ -9,7 +9,7 @@ DESCRIPTION = "Minecraft for the TI84+ CE!"
 COMPRESSED = YES
 
 COMPRESSED_MODE = zx7
-ARCHIVED = NO
+ARCHIVED = YES
 
 CFLAGS = -Wall -Wextra -O3 -ffast-math
 CXXFLAGS = -Wall -Wextra -O3 -ffast-math

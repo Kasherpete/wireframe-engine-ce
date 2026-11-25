@@ -23,6 +23,7 @@
 #define TITLE_QUIT  2           // quit without saving
 #define TITLE_RESUME     3      // pause menu: back to the game
 #define TITLE_SAVE_QUIT  4      // pause menu: save the position, then quit
+#define TITLE_START      5      // the low memory notice: play the world opened for TITLE_PLAY
 
 // reads the keys and turns the camera for dt clock ticks: TITLE_STAY, TITLE_PLAY or TITLE_QUIT
 uint8_t titleUpdate(uint24_t dt);
@@ -36,8 +37,12 @@ void titleError(const char *msg);
 // at startup with no world open: the message screen first. reason: a worldError message, or NULL
 // when there is no world at all
 void titleNoWorld(const char *reason);
-// opens the pause menu (until TITLE_RESUME); keys held now count as already pressed
-void titlePause(void);
+// after TITLE_PLAY, if the world cannot be saved (worldCanSave): a notice that it can be played
+// but not saved (need and avail: bytes), then TITLE_START, or [clear] back to the world list
+void titleLowMemory(uint24_t need, uint24_t avail);
+// opens the pause menu (until TITLE_RESUME); keys held now count as already pressed. Without
+// can_save it says under the buttons that Save & Quit cannot save
+void titlePause(uint8_t can_save);
 // after drawSpans: the title and the buttons (the frame needs deinterlaceFrame(GFX_LCD_HEIGHT))
 void titleDraw(void);
 

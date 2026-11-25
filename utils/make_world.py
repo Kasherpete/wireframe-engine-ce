@@ -11,7 +11,8 @@ Usage: python3 utils/make_world.py [out.8xv] [--preset PRESET] [--name NAME]
              islands  24 x 24 chunks of sea with small islands (huts, trees, a lighthouse)
              plains   24 x 24 chunks of open grassland with far-apart landmarks
              The last three are large but sparse (a few features in view at once), and stay
-             under BIG_WORLD_MAX bytes so Save & Quit can unarchive them in free RAM
+             under BIG_WORLD_MAX bytes. Save & Quit needs free RAM the size of the world while
+             the game runs (it says so when there is not enough)
   --appvar   the AppVar name on the calculator (the engine lists every AppVar starting with "VXWD", whatever its name)
   --ram      send it to RAM instead of the archive
   --bin      also write the raw AppVar contents
@@ -365,7 +366,7 @@ def preset_random():
 # Large in area, but with features far apart: from anywhere only a few are within the render
 # distance (24), so the box count stays near the test world's
 BIG = 24                # chunks per side: 192 x 192 cells
-BIG_WORLD_MAX = 30000   # bytes: Save & Quit unarchives the world, which needs that much free RAM
+BIG_WORLD_MAX = 30000   # bytes (the CRC check at load takes ~2 s per 36 KB)
 
 DARK_BLUE, PURPLE, DARK_GREEN, BROWN, DARK_GREY = 1, 2, 3, 4, 5
 GREY, WHITE, RED, ORANGE, YELLOW, GREEN, BLUE, LAVENDER, PINK, SAND = 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
@@ -648,7 +649,7 @@ def main():
         w.name = a.name
     data, chunks = w.pack()
     if w.size_x >= BIG:
-        assert len(data) <= BIG_WORLD_MAX, f"{len(data)} bytes: too big for Save & Quit"
+        assert len(data) <= BIG_WORLD_MAX, f"{len(data)} bytes: over BIG_WORLD_MAX"
     with open(a.out, "wb") as f:
         f.write(to_8xv(data, a.appvar, not a.ram))
     if a.bin:

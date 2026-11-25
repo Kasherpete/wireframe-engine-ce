@@ -4,6 +4,9 @@
 #include "hud.h"
 #include "pico8_font.h"
 
+// Not per-box code: built for size (CLAUDE.md, "Memory"). Saves ~15 KB of RAM over -O3 inlining
+#pragma clang attribute push (__attribute__((minsize)), apply_to = function)
+
 uint8_t hud_shown = 0;
 
 #ifdef PROFILE
@@ -46,3 +49,5 @@ void hudDraw(uint8_t fps, uint24_t voxels, uint24_t frame_cycles) {
     fontlib_DrawUInt(voxels, 1);
     drawMs(19, "f ", frame_cycles);
 }
+
+#pragma clang attribute pop

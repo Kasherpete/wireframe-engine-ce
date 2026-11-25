@@ -2,12 +2,16 @@
 // Runs at startup, on chunk loads and at exit: plain C is fine here.
 #include <string.h>
 #include <fileioc.h>
+#include <ti/vars.h>
 #include <sys/rtc.h>
 #include <sys/timers.h>
 
 #include "display.h"
 #include "engine.h"
 #include "world.h"
+
+// Not per-box code: built for size (CLAUDE.md, "Memory"). Saves ~15 KB of RAM over -O3 inlining
+#pragma clang attribute push (__attribute__((minsize)), apply_to = function)
 
 #define CRC_BLOCK  512    // bytes of CRC between progress bar updates
 #define CRC_START  __builtin_offsetof(world_header_t, name)   // the checksum covers the rest
@@ -305,6 +309,31 @@ const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count, uint8_t 
 
 // ---- closing ----
 
+static uint24_t freeRam(void) {
+    void *start;
+    return os_MemChk(&start);
+}
+
+// room to move bytes of an archived variable to RAM
+static uint8_t roomFor(uint24_t bytes) {
+    return freeRam() >= bytes + WORLD_RAM_MARGIN;
+}
+
+uint8_t worldCanSave(uint24_t *need, uint24_t *avail) {
+    uint24_t n = 0;
+    if (handle && ti_IsArchived(handle)) {
+        n = world_size + WORLD_RAM_MARGIN;
+    }
+    const uint24_t f = freeRam();
+    if (need) {
+        *need = n;
+    }
+    if (avail) {
+        *avail = f;
+    }
+    return f >= n;
+}
+
 static uint8_t player_set = 0;
 static int16_t player_cx, player_cz;
 static int8_t  player_feet;
@@ -326,6 +355,9 @@ uint8_t worldClose(uint8_t save) {
     const int archived = ti_IsArchived(handle);
     world = NULL;   // the AppVar may move from here on
     world_current = WORLD_NONE;
+    if (save && archived && !roomFor(world_size)) {
+        save = 0;           // ti_SetArchiveStatus would end the program with ERR:MEMORY
+    }
     if (save && (!archived || ti_SetArchiveStatus(false, handle))) {
         uint8_t *data = ti_GetDataPtr(handle);
         world_header_t *h = (world_header_t *)data;
@@ -413,7 +445,9 @@ uint8_t worldRename(uint8_t i, const char *name) {
         const uint8_t archived = ti_IsArchived(h);
         if (size < sizeof(world_header_t) || hd->version != WORLD_VERSION) {
             err = WORLD_BAD_HEADER;     // the name may be elsewhere in another version
-        } else if (ti_IsArchived(h) && !ti_SetArchiveStatus(false, h)) {
+        } else if (archived && !roomFor(size)) {
+            err = WORLD_NO_MEMORY;      // ti_SetArchiveStatus would end the program (ERR:MEMORY)
+        } else if (archived && !ti_SetArchiveStatus(false, h)) {
             err = WORLD_NO_MEMORY;
         } else {
             if (archived) {
@@ -451,7 +485,7 @@ uint8_t worldCreate(const char *name, char *appvar) {
         }
         ti_Close(h);
     }
-    if (n == 100) {
+    if (n == 100 || !roomFor(NEW_BYTES)) {
         return WORLD_NO_MEMORY;
     }
 
@@ -499,3 +533,5 @@ void worldArchivePending(void) {
     }
     pending_count = 0;
 }
+
+#pragma clang attribute pop
