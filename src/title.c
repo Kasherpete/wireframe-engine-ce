@@ -3,11 +3,14 @@
 
 #include <sys/rtc.h>
 
+#include "camera.h"
 #include "display.h"
+#include "hud.h"
 #include "pico8_font.h"
 #include "player.h"
 #include "title.h"
 #include "title_font.h"
+#include "world.h"
 
 #define BUTTONS    3
 #define BUTTON_X   40           // logical pixels (160 x 120)
@@ -54,37 +57,166 @@ static uint8_t splash_ready = 0;
 // 2^24 yaw units per turn and 32768 ticks per second: dt << 3 is one turn in 64 s
 #define TURN_SHIFT  3
 
+// the screens
+#define SCREEN_MAIN      0
+#define SCREEN_SETTINGS  1
+#define SCREEN_WORLDS    2
+
 static const char *const labels[BUTTONS] = {"Play", "Settings", "Quit"};
-static uint8_t selected = 0;
+static uint8_t screen = SCREEN_MAIN;
+static uint8_t selected = 0;       // the button of the screen shown
 static uint8_t keys_prev = 0;      // main waits for [2nd]/[enter] to be released first
 
 #define KEY_UP      0x01
 #define KEY_DOWN    0x02
-#define KEY_CHOOSE  0x04
+#define KEY_LEFT    0x04
+#define KEY_RIGHT   0x08
+#define KEY_CHOOSE  0x10
+#define KEY_BACK    0x20
+
+// ---- settings ----
+#define SET_RENDER   0
+#define SET_FOG      1
+#define SET_HUD      2
+#define SET_DONE     3
+#define SETTINGS     4
+#define RENDER_MIN   8          // render distance steps, up to GRID_RANGE
+#define RENDER_STEP  4
+_Static_assert((GRID_RANGE - RENDER_MIN) % RENDER_STEP == 0, "the steps must reach GRID_RANGE");
+
+static uint8_t fog_on = FOG_DIST < GRID_RANGE;
+
+// render_dist and fog_dist from the settings: fog over the last third, so 16 at 24 (FOG_DIST)
+static void applySettings(void) {
+    fog_dist = fog_on ? render_dist - render_dist / 3 : 255;
+}
+
+// dir: +1 or -1 (left/right; wraps only with wrap, for [2nd])
+static void changeSetting(uint8_t item, int8_t dir, uint8_t wrap) {
+    if (item == SET_RENDER) {
+        int24_t d = render_dist + dir * RENDER_STEP;
+        if (d > GRID_RANGE) {
+            d = wrap ? RENDER_MIN : GRID_RANGE;
+        }
+        if (d < RENDER_MIN) {
+            d = RENDER_MIN;
+        }
+        render_dist = d;
+    } else if (item == SET_FOG) {
+        fog_on = !fog_on;
+    } else if (item == SET_HUD) {
+        hud_shown = !hud_shown;
+    }
+    applySettings();
+}
+
+// ---- the world list ----
+#define LIST_ROWS  4            // world buttons shown at once
+static uint8_t list_top = 0;    // the first one shown
+static const char *list_error = NULL;
+static uint8_t chosen_world = 0;
+
+uint8_t titleWorld(void) {
+    return chosen_world;
+}
+
+void titleError(const char *msg) {
+    list_error = msg;
+}
+
+static void openScreen(uint8_t s, uint8_t sel) {
+    screen = s;
+    selected = sel;
+    list_top = 0;
+    list_error = NULL;
+}
 
 uint8_t titleUpdate(uint24_t dt) {
     player_yaw += dt << TURN_SHIFT;
 
-    const uint8_t keys = ((kb_Data[7] & kb_Up) ? KEY_UP : 0) | ((kb_Data[7] & kb_Down) ? KEY_DOWN : 0)
-        | (((kb_Data[1] & kb_2nd) || (kb_Data[6] & kb_Enter)) ? KEY_CHOOSE : 0);
+    uint8_t keys = 0;
+    if (kb_Data[7] & kb_Up) {
+        keys |= KEY_UP;
+    }
+    if (kb_Data[7] & kb_Down) {
+        keys |= KEY_DOWN;
+    }
+    if (kb_Data[7] & kb_Left) {
+        keys |= KEY_LEFT;
+    }
+    if (kb_Data[7] & kb_Right) {
+        keys |= KEY_RIGHT;
+    }
+    if ((kb_Data[1] & kb_2nd) || (kb_Data[6] & kb_Enter)) {
+        keys |= KEY_CHOOSE;
+    }
+    if (kb_Data[6] & kb_Clear) {
+        keys |= KEY_BACK;
+    }
     const uint8_t pressed = keys & ~keys_prev;
     const uint8_t released = keys_prev & ~keys;
     keys_prev = keys;
 
+    // the buttons of this screen
+    uint8_t n = BUTTONS;
+    if (screen == SCREEN_SETTINGS) {
+        n = SETTINGS;
+    } else if (screen == SCREEN_WORLDS) {
+        n = world_count + 1;                    // the worlds, then back
+    }
+    const uint8_t old = selected;
     if ((pressed & KEY_UP) && selected > 0) {
         selected--;
     }
-    if ((pressed & KEY_DOWN) && selected < BUTTONS - 1) {
+    if ((pressed & KEY_DOWN) && selected < n - 1) {
         selected++;
     }
-    if (released & KEY_CHOOSE) {
-        if (selected == 0) {
-            return TITLE_PLAY;
-        }
-        if (selected == 2) {
+
+    if (screen == SCREEN_MAIN) {
+        if (pressed & KEY_BACK) {
             return TITLE_QUIT;
         }
-        // settings: nothing yet
+        if (released & KEY_CHOOSE) {
+            if (selected == 0) {
+                // the open world first selected
+                openScreen(SCREEN_WORLDS, world_current < world_count ? world_current : 0);
+            } else if (selected == 1) {
+                openScreen(SCREEN_SETTINGS, 0);
+            } else {
+                return TITLE_QUIT;
+            }
+        }
+    } else if (screen == SCREEN_SETTINGS) {
+        if (pressed & KEY_LEFT) {
+            changeSetting(selected, -1, 0);
+        }
+        if (pressed & KEY_RIGHT) {
+            changeSetting(selected, 1, 0);
+        }
+        if (released & KEY_CHOOSE) {
+            if (selected == SET_DONE) {
+                openScreen(SCREEN_MAIN, 1);
+            } else {
+                changeSetting(selected, 1, 1);
+            }
+        }
+        if (pressed & KEY_BACK) {
+            openScreen(SCREEN_MAIN, 1);
+        }
+    } else {
+        if (selected != old) {
+            list_error = NULL;
+        }
+        if (pressed & KEY_BACK) {
+            openScreen(SCREEN_MAIN, 0);
+        } else if (released & KEY_CHOOSE) {
+            if (selected == world_count) {
+                openScreen(SCREEN_MAIN, 0);
+            } else {
+                chosen_world = selected;
+                return TITLE_PLAY;
+            }
+        }
     }
     return TITLE_STAY;
 }
@@ -157,14 +289,184 @@ static void splashRender(void) {
     splash_ready = 1;
 }
 
-void titleDraw(void) {
+// ---- the menus ----
+#define MENU_HEAD_Y   4         // the heading (legacy font)
+#define MENU_Y0       16        // the first button
+#define MENU_DY       16
+#define SETTINGS_X    30
+#define SETTINGS_W    100
+#define STAR_Y        84        // the star text: 4 PICO-8 lines
+#define LINE_DY       7         // a PICO-8 line: 5 rows, the shadow, a blank row
+#define LIST_X        20
+#define LIST_W        120
+#define INFO_Y        83        // 2 PICO-8 lines under the world list
+#define BACK_Y        99
+#define LABEL_MAX     24        // characters of a button label, NUL included
+#define TEXT_MAX      32        // characters of a PICO-8 line, NUL included (128 px)
+
+// a button with its label centred (fitted: see fitLabel)
+static void drawButton(int x, int y, int w, const char *label, uint8_t sel) {
+    gfx_SetColor(SHADOW_COLOUR);
+    gfx_Rectangle(x, y, w, BUTTON_H);
+    gfx_SetColor(sel ? SELECTED_COLOUR : BUTTON_COLOUR);
+    gfx_FillRectangle(x + 1, y + 1, w - 2, BUTTON_H - 2);
+    printShadowed(label, centredX(label), y + 3, TEXT_COLOUR);
+}
+
+// src (any bytes: a world name from a file) into dst for the legacy font: characters it lacks
+// become '?', and it is cut to at most max_w pixels and LABEL_MAX - 1 characters, so centred it
+// lies on the screen (the text is drawn unclipped)
+static void fitLabel(char *dst, const char *src, uint8_t max_w) {
+    uint8_t w = 0, n = 0;
+    while (*src && n < LABEL_MAX - 1) {
+        uint8_t c = (uint8_t)*src++;
+        if (c < ' ' || c > '~') {
+            c = '?';
+        }
+        w += legacy_spacing[c];
+        if (w > max_w) {
+            break;
+        }
+        dst[n++] = (char)c;
+    }
+    dst[n] = '\0';
+}
+
+// src into dst for the PICO-8 font: lowercase (its capitals), '?' for what it lacks, at most
+// TEXT_MAX - 1 characters
+static void pico8Text(char *dst, const char *src) {
+    uint8_t n = 0;
+    while (*src && n < TEXT_MAX - 1) {
+        uint8_t c = (uint8_t)*src++;
+        if (c >= 'A' && c <= 'Z') {
+            c += 'a' - 'A';
+        }
+        if (c < ' ' || c > '~') {
+            c = '?';
+        }
+        dst[n++] = (char)c;
+    }
+    dst[n] = '\0';
+}
+
+static void pico8Centred(const char *s, uint8_t y, uint8_t colour) {
+    pico8Shadowed(s, GFX_WIDTH_HALF - fontlib_GetStringWidth(s) / 2, y, colour);
+}
+
+// v (< 1000) in decimal at p, NUL terminated; returns the end
+static char *putUInt(char *p, uint24_t v) {
+    if (v >= 100) {
+        *p++ = (char)('0' + v / 100);
+    }
+    if (v >= 10) {
+        *p++ = (char)('0' + v / 10 % 10);
+    }
+    *p++ = (char)('0' + v % 10);
+    *p = '\0';
+    return p;
+}
+
+static char *putStr(char *p, const char *s) {
+    while (*s) {
+        *p++ = *s++;
+    }
+    *p = '\0';
+    return p;
+}
+
+static void drawHeading(const char *s) {
+    printShadowed(s, centredX(s), MENU_HEAD_Y, TITLE_COLOUR);
+}
+
+static void drawSettings(void) {
+    drawHeading("Settings");
+    char label[LABEL_MAX];
+    for (uint8_t i = 0; i < SETTINGS; i++) {
+        char *p = label;
+        if (i == SET_RENDER) {
+            p = putStr(p, "Render: ");
+            putUInt(p, render_dist);
+        } else if (i == SET_FOG) {
+            p = putStr(p, "Fog: ");
+            putStr(p, fog_on ? "On" : "Off");
+        } else if (i == SET_HUD) {
+            p = putStr(p, "FPS info: ");
+            putStr(p, hud_shown ? "On" : "Off");
+        } else {
+            putStr(p, "Done");
+        }
+        drawButton(SETTINGS_X, MENU_Y0 + i * MENU_DY, SETTINGS_W, label, i == selected);
+    }
+    // PICO-8 text is lowercase (its capitals)
+    pico8Centred("like it? no need to donate -", STAR_Y, TEXT_COLOUR);
+    pico8Centred("just star it on github:", STAR_Y + LINE_DY, TEXT_COLOUR);
+    pico8Centred("github.com/kasherpete/", STAR_Y + 2 * LINE_DY, SPLASH_COLOUR);
+    pico8Centred("wireframe-engine-ce", STAR_Y + 3 * LINE_DY, SPLASH_COLOUR);
+}
+
+static void drawWorlds(void) {
+    drawHeading("Select World");
+    // the selected world in view
+    if (selected < world_count) {
+        if (selected < list_top) {
+            list_top = selected;
+        }
+        if (selected >= list_top + LIST_ROWS) {
+            list_top = selected - (LIST_ROWS - 1);
+        }
+    }
+    char label[LABEL_MAX];
+    for (uint8_t r = 0; r < LIST_ROWS && list_top + r < world_count; r++) {
+        const world_entry_t *e = &world_list[list_top + r];
+        fitLabel(label, e->name[0] ? e->name : e->appvar, LIST_W - 4);
+        drawButton(LIST_X, MENU_Y0 + r * MENU_DY, LIST_W, label, list_top + r == selected);
+    }
+    // more above or below
+    if (list_top > 0) {
+        pico8Shadowed("^", LIST_X + LIST_W + 3, MENU_Y0 + 4, TEXT_COLOUR);
+    }
+    if (list_top + LIST_ROWS < world_count) {
+        pico8Shadowed("v", LIST_X + LIST_W + 3, MENU_Y0 + (LIST_ROWS - 1) * MENU_DY + 4, TEXT_COLOUR);
+    }
+
+    // the selected world: its AppVar, its place in the list, when it was last played
+    if (selected < world_count) {
+        const world_entry_t *e = &world_list[selected];
+        char text[TEXT_MAX];
+        char *p = putStr(text, "appvar ");
+        pico8Text(p, e->appvar);
+        pico8Shadowed(text, LIST_X, INFO_Y, TEXT_COLOUR);
+        p = putUInt(text, selected + 1);
+        p = putStr(p, "/");
+        putUInt(p, world_count);
+        pico8Shadowed(text, LIST_X + LIST_W - fontlib_GetStringWidth(text), INFO_Y, TEXT_COLOUR);
+
+        if (list_error) {
+            pico8Text(text, list_error);
+            pico8Shadowed(text, LIST_X, INFO_Y + LINE_DY, SPLASH_COLOUR);
+        } else if (e->last_played.year == 0) {
+            pico8Shadowed("never played", LIST_X, INFO_Y + LINE_DY, TEXT_COLOUR);
+        } else {
+            fontlib_SetForegroundColor(SHADOW_COLOUR);
+            for (uint8_t pass = 0; pass < 2; pass++) {
+                fontlib_SetCursorPosition(LIST_X + 1 - pass, INFO_Y + LINE_DY + 1 - pass);
+                fontlib_DrawString("last played ");
+                fontlib_DrawUInt(e->last_played.year, 4);
+                fontlib_DrawGlyph('-');
+                fontlib_DrawUInt(e->last_played.month, 2);
+                fontlib_DrawGlyph('-');
+                fontlib_DrawUInt(e->last_played.day, 2);
+                fontlib_SetForegroundColor(TEXT_COLOUR);
+            }
+        }
+    }
+    drawButton(BUTTON_X, BACK_Y, BUTTON_W, "Back", selected == world_count);
+}
+
+static void drawMain(void) {
     if (!splash_ready) {
         splashRender();
     }
-    // unclipped text (graphx clipped text ignores the scale): fixed strings, all inside 160 x 120
-    gfx_SetTextBGColor(NO_TEXT_BG);
-    gfx_SetTextTransparentColor(NO_TEXT_BG);
-
     // the default font for the title, PICO-8 (fontlib) for the edition box and corners, the
     // legacy font for the buttons
     gfx_SetFontData(NULL);
@@ -176,9 +478,6 @@ void titleDraw(void) {
     gfx_PrintStringXY("CALCRAFT", centredX("CALCRAFT"), TITLE_Y);
 
     gfx_SetTextScale(1, 1);
-    fontlib_SetFont(PICO8_FONT, 0);
-    fontlib_SetWindow(0, 0, GFX_LCD_WIDTH, GFX_LCD_HEIGHT);
-    fontlib_SetTransparency(true);
     const uint24_t ew = fontlib_GetStringWidth(EDITION_TEXT) + 5;   // the advance leaves 1 px right
     const uint24_t ex = GFX_WIDTH_HALF - ew / 2;
     gfx_SetColor(SHADOW_COLOUR);
@@ -203,11 +502,29 @@ void titleDraw(void) {
     gfx_SetFontData(legacy_font);
     gfx_SetFontSpacing(legacy_spacing);
     for (uint8_t i = 0; i < BUTTONS; i++) {
-        const int y = BUTTON_Y0 + i * BUTTON_DY;
-        gfx_SetColor(SHADOW_COLOUR);
-        gfx_Rectangle(BUTTON_X, y, BUTTON_W, BUTTON_H);
-        gfx_SetColor(i == selected ? SELECTED_COLOUR : BUTTON_COLOUR);
-        gfx_FillRectangle(BUTTON_X + 1, y + 1, BUTTON_W - 2, BUTTON_H - 2);
-        printShadowed(labels[i], centredX(labels[i]), y + 3, TEXT_COLOUR);
+        drawButton(BUTTON_X, BUTTON_Y0 + i * BUTTON_DY, BUTTON_W, labels[i], i == selected);
+    }
+}
+
+void titleDraw(void) {
+    // unclipped text (graphx clipped text ignores the scale): fixed strings, or fitted (fitLabel),
+    // all inside 160 x 120
+    gfx_SetTextBGColor(NO_TEXT_BG);
+    gfx_SetTextTransparentColor(NO_TEXT_BG);
+    fontlib_SetFont(PICO8_FONT, 0);
+    fontlib_SetWindow(0, 0, GFX_LCD_WIDTH, GFX_LCD_HEIGHT);
+    fontlib_SetTransparency(true);
+
+    if (screen == SCREEN_MAIN) {
+        drawMain();
+        return;
+    }
+    gfx_SetTextScale(1, 1);
+    gfx_SetFontData(legacy_font);
+    gfx_SetFontSpacing(legacy_spacing);
+    if (screen == SCREEN_SETTINGS) {
+        drawSettings();
+    } else {
+        drawWorlds();
     }
 }

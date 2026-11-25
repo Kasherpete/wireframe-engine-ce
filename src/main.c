@@ -1,4 +1,5 @@
-// Voxel engine demo: a title screen, then walk around the world in the WORLD AppVar. [clear] quits.
+// Voxel engine demo: a title screen (settings, a world list), then walk around the chosen world
+// (world.h: any AppVar starting with WORLD_MAGIC). [clear] quits.
 //
 // A frame: move the player, set up the camera, load chunks that came into view, project and
 // rasterize the scene (before the wait: none of it touches a frame buffer, so it overlaps the LCD
@@ -45,6 +46,7 @@ int main(void) {
     coloursInit();
     playerSpawn();              // the title screen first, from the spawn; [play] spawns again
     uint8_t title = 1;
+    uint8_t played = 0;         // a world was played: its last played date is saved at exit
 
     hudInit();
     displayInit();
@@ -69,7 +71,7 @@ int main(void) {
     const uint8_t kb_mode = kb_GetMode();
     kb_SetMode(MODE_3_CONTINUOUS);
 
-    while (!(kb_Data[6] & kb_Clear)) {
+    for (;;) {
 
         const uint24_t frame_start = CYCLES();
         frame_count++;
@@ -95,14 +97,38 @@ int main(void) {
                 break;
             }
             if (choice == TITLE_PLAY) {
-                playerSpawn();
-                title = 0;
+                // another world than the one behind the title: the loading screen while it is
+                // checked (on an error the open one stays, and the title shows why)
+                uint8_t err = WORLD_OK;
+                const uint8_t w = titleWorld();
+                if (w != world_current) {
+                    displayReload();
+                    loading = 1;
+                    err = worldSelect(w);
+                    if (err == WORLD_OK) {
+                        coloursInit();
+                        windowInit();       // windowFollow below loads it all
+                    } else {
+                        titleError(worldError(err));
+                    }
+                }
+                if (err == WORLD_OK) {
+                    playerSpawn();
+                    title = 0;
+                    played = 1;
+                }
             }
         } else {
+            if (kb_Data[6] & kb_Clear) {
+                break;
+            }
             playerUpdate(dt);
         }
         setupCamera();
         windowFollow();
+        if (loading) {
+            displayProgress(LOADING_FULL);
+        }
 
         // cull, project and rasterize before the wait (fill.h: unless the span list overflows)
         const uint24_t project_start = CYCLES();
@@ -123,9 +149,11 @@ int main(void) {
         if (title) {
             titleDraw();
             deinterlaceFrame(GFX_LCD_HEIGHT);
-        } else {
+        } else if (hud_shown) {
             hudDraw(fps, draw_cycles, frame_cycles);
             deinterlaceFrame(HUD_ROWS);
+        } else {
+            deinterlaceFrame(0);
         }
         swapBuffer();
         if (loading) {
@@ -136,11 +164,11 @@ int main(void) {
         frame_cycles = CYCLES() - frame_start - wait_cycles;
     }
 
-    // The world's last played date last: archiving it may show the OS garbage collection screen,
+    // The world's last played date last (only if it was played, not just seen behind the title): archiving it may show the OS garbage collection screen,
     // and it needs free RAM, so a scratch AppVar (the bench's, or an older version's) goes first
     kb_SetMode(kb_mode);
     gfx_End();
     windowFree();
-    worldClose();
+    worldClose(played);
     return 0;
 }

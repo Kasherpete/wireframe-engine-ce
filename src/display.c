@@ -101,21 +101,37 @@ static void loadingRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t colo
 }
 
 
-void displayLoading(void) {
-    gfx_Begin();
-    gfx_SetPalette(palette, sizeof palette, 0);
+// the loading screen into BUFFER_1, shown, with palette entry 7 white
+static void loadingShow(void) {
     gfx_palette[LOADING_FG & 0x0f] = LOADING_WHITE;
-    gfx_SetClipRegion(SCREEN_OFFSET, 0, SCREEN_OFFSET + VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
-
-    // the background and the empty bar, then shown
     memset((void *)BUFFER_1, LOADING_BG, BUFFER_2 - BUFFER_1);
     loadingRect(BAR_X, BAR_Y, BAR_W, BAR_H, LOADING_FG);
     loadingRect(BAR_X + 1, BAR_Y + 1, BAR_W - 2, BAR_H - 2, LOADING_BG);
     setScreenBuffer(BUFFER_1);
+    loading = 1;
+    bar_px = 0;
+}
+
+
+void displayLoading(void) {
+    gfx_Begin();
+    gfx_SetPalette(palette, sizeof palette, 0);
+    gfx_SetClipRegion(SCREEN_OFFSET, 0, SCREEN_OFFSET + VIEWPORT_LENGTH, GFX_LCD_HEIGHT);
+
+    // the background and the empty bar, then shown
+    loadingShow();
     setDrawBuffer(BUFFER_1);
     lcd_Control = LCD_CONTROL_4BPP;
-    started = loading = 1;
-    bar_px = 0;
+    started = 1;
+}
+
+
+void displayReload(void) {
+    loadingShow();
+    // as swapBuffer: BUFFER_1 handed to the LCD, so the next frame waits for it and goes to BUFFER_2
+    lcd_IntAcknowledge = LCD_INT_LNBU;
+    drawing_buffer_2 = 1;
+    setDrawBuffer(BUFFER_2);
 }
 
 

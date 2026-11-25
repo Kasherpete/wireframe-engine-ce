@@ -22,7 +22,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define WORLD_APPVAR     "WORLD"   // the AppVar the engine opens
+#define WORLD_MAGIC      "VXWD"    // the first bytes of a world AppVar (any name): worldScan
+#define WORLD_LIST_MAX   16        // worlds worldScan lists (the rest are left out)
 #define WORLD_VERSION    3
 #define WORLD_NAME_LEN   16        // name bytes, NUL terminated
 #define CHUNK_SIZE       8         // cells per chunk along x and z
@@ -81,22 +82,40 @@ typedef struct {
 // the open world's header (in the AppVar: read only while it is archived). NULL until worldOpen()
 extern const world_header_t *world;
 
+// a world AppVar found by worldScan: from its header, unchecked (worldOpen checks it)
+typedef struct {
+    char         appvar[9];        // the AppVar name, NUL terminated
+    char         name[WORLD_NAME_LEN];   // the world name, NUL terminated (any bytes: sanitize)
+    world_date_t last_played;
+} world_entry_t;
+
+extern world_entry_t world_list[WORLD_LIST_MAX];
+extern uint8_t world_count;        // entries in world_list
+extern uint8_t world_current;      // world_list index of the open world, WORLD_NONE if none
+#define WORLD_NONE       0xff
+
+// Lists the AppVars (RAM or archive) whose data starts with WORLD_MAGIC, most recently played
+// first. Before any world is opened (world_current is reset)
+void worldScan(void);
 // Opens the AppVar, checks the header and the checksum, and checks that every chunk lies inside
-// the file and every voxel is in range (so the engine needs no checks later). WORLD_OK or an error
+// the file and every voxel is in range (so the engine needs no checks later). Then it replaces the
+// open world (closed unsaved). On an error the open world stays as it was. WORLD_OK or an error
 uint8_t worldOpen(const char *appvar);
+// worldOpen of world_list[i], setting world_current
+uint8_t worldSelect(uint8_t i);
 // a short message for a worldOpen() error
 const char *worldError(uint8_t err);
-// Opens WORLD_APPVAR before graphx starts. On an error it says so on the home screen, waits for a
-// key and returns 0
+// Before graphx starts: worldScan, then opens the most recently played world that passes the
+// checks. If none does, it says so on the home screen, waits for a key and returns 0
 uint8_t worldStart(void);
 // the records of chunk (cx, cz), their number in *count and their run orientation in *runs (as
 // world_chunk_t). NULL, 0 and WORLD_RUNS_NONE outside the world
 const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count, uint8_t *runs);
-// Stores the current date and time as last played, updates the checksum and closes the world.
-// An archived world is moved to RAM for that and archived again, which needs free RAM the size of
+// Closes the world. With save, first stores the current date and time as last played and updates
+// the checksum (only for a world that was played, not one only seen behind the title). An archived world is moved to RAM for that and archived again, which needs free RAM the size of
 // the world (otherwise the date is left as it was). Call it after gfx_End(): archiving may run a
 // garbage collection, which shows its own screen. Returns 0 if the date could not be saved
-uint8_t worldClose(void);
+uint8_t worldClose(uint8_t save);
 
 // CRC-32 as zlib computes it, continuing from crc (0 to start)
 uint32_t crc32(uint32_t crc, const void *data, size_t len);

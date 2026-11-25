@@ -7,7 +7,7 @@ Usage: python3 utils/make_world.py [out.8xv] [--preset test|dense|random] [--nam
   --preset   test   (default) a 6 x 6 chunk world with features across chunk borders
              dense  every chunk near the 255 voxel limit (benchmarks, worst case)
              random random boxes of random size, colour and height scattered over the ground plane
-  --appvar   the AppVar name on the calculator (the engine opens WORLD_APPVAR, "WORLD")
+  --appvar   the AppVar name on the calculator (the engine lists every AppVar starting with "VXWD", whatever its name)
   --ram      send it to RAM instead of the archive
   --bin      also write the raw AppVar contents
 

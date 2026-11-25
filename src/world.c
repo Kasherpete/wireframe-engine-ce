@@ -26,6 +26,10 @@ const world_header_t *world = NULL;
 static uint8_t  handle = 0;
 static uint16_t world_size;            // bytes
 
+world_entry_t world_list[WORLD_LIST_MAX];
+uint8_t world_count = 0;
+uint8_t world_current = WORLD_NONE;
+
 
 // ---- CRC-32 ----
 // Two steps per byte through a 16 entry table (64 bytes), instead of a 256 entry one (1 KB in the
@@ -54,7 +58,7 @@ uint32_t crc32(uint32_t crc, const void *data, size_t len) {
 // chunk-local x and z keep the painter order and the grid indices valid, y bounds the sort keys, a
 // run is at most RUN_MAX long (project.S has room for that many) and of its chunk's orientation (or
 // the painter order would be wrong for it)
-static uint8_t worldCheck(const uint8_t *data) {
+static uint8_t worldCheck(const uint8_t *data, uint24_t size) {
     const world_header_t *h = (const world_header_t *)data;
     if (h->size_x == 0 || h->size_z == 0) {
         return WORLD_BAD_DATA;
@@ -64,7 +68,7 @@ static uint8_t worldCheck(const uint8_t *data) {
     }
     const uint24_t chunks = (uint24_t)h->size_x * h->size_z;
     const uint24_t index_end = sizeof(world_header_t) + chunks * sizeof(world_chunk_t);
-    if (index_end > world_size) {
+    if (index_end > size) {
         return WORLD_BAD_DATA;
     }
     const world_chunk_t *c = (const world_chunk_t *)(data + sizeof(world_header_t));
@@ -72,7 +76,7 @@ static uint8_t worldCheck(const uint8_t *data) {
         if (c->offset < index_end) {
             return WORLD_BAD_DATA;
         }
-        if ((uint24_t)c->offset + c->count * sizeof(world_voxel_t) > world_size) {
+        if ((uint24_t)c->offset + c->count * sizeof(world_voxel_t) > size) {
             return WORLD_BAD_DATA;
         }
         if (c->runs > WORLD_RUNS_Z) {
@@ -138,52 +142,104 @@ static uint8_t worldCheck(const uint8_t *data) {
     return WORLD_OK;
 }
 
+// a before b: played later (never played, year 0, sorts last)
+static uint8_t playedLater(const world_date_t *a, const world_date_t *b) {
+    if (a->year != b->year) {
+        return a->year > b->year;
+    }
+    const uint8_t *x = &a->month, *y = &b->month;     // month, day, hour, minute, second
+    for (uint8_t i = 0; i < 5; i++) {
+        if (x[i] != y[i]) {
+            return x[i] > y[i];
+        }
+    }
+    return 0;
+}
+
+void worldScan(void) {
+    world_count = 0;
+    world_current = WORLD_NONE;
+    void *vat = NULL;
+    const char *var;
+    while (world_count < WORLD_LIST_MAX && (var = ti_Detect(&vat, WORLD_MAGIC)) != NULL) {
+        world_entry_t e;
+        memset(&e, 0, sizeof e);
+        strncpy(e.appvar, var, sizeof e.appvar - 1);
+        const uint8_t h = ti_Open(e.appvar, "r");
+        if (!h) {
+            continue;
+        }
+        if (ti_GetSize(h) >= sizeof(world_header_t)) {
+            const world_header_t *hd = ti_GetDataPtr(h);
+            memcpy(e.name, hd->name, WORLD_NAME_LEN - 1);
+            e.last_played = hd->last_played;
+        }
+        ti_Close(h);
+        // insertion, most recently played first
+        uint8_t i = world_count++;
+        while (i > 0 && playedLater(&e.last_played, &world_list[i - 1].last_played)) {
+            world_list[i] = world_list[i - 1];
+            i--;
+        }
+        world_list[i] = e;
+    }
+}
+
 uint8_t worldOpen(const char *appvar) {
-    handle = ti_Open(appvar, "r");
-    if (!handle) {
+    const uint8_t h_new = ti_Open(appvar, "r");
+    if (!h_new) {
         return WORLD_MISSING;
     }
-    world_size = ti_GetSize(handle);
-    const uint8_t *data = ti_GetDataPtr(handle);
+    const uint24_t size = ti_GetSize(h_new);
+    const uint8_t *data = ti_GetDataPtr(h_new);
     const world_header_t *h = (const world_header_t *)data;
     uint8_t err = WORLD_OK;
-    if (world_size < sizeof(world_header_t)) {
+    if (size < sizeof(world_header_t)) {
         err = WORLD_BAD_HEADER;
-    } else if (memcmp(h->magic, "VXWD", 4) != 0) {
+    } else if (memcmp(h->magic, WORLD_MAGIC, 4) != 0) {
         err = WORLD_BAD_HEADER;
     } else if (h->version != WORLD_VERSION) {
         err = WORLD_BAD_HEADER;
     } else {
         // in blocks, for the progress bar (crc32 chains: it inverts on entry and exit)
-        const uint24_t len = world_size - CRC_START;
+        const uint24_t len = size - CRC_START;
         uint32_t crc = 0;
         for (uint24_t done = 0; done < len; ) {
             const uint24_t n = len - done < CRC_BLOCK ? len - done : CRC_BLOCK;
             crc = crc32(crc, data + CRC_START + done, n);
             done += n;
-            // msleep(10);
             displayProgress(done * LOADING_CRC / len);      // < 2^24: len < 2^16
         }
         if (crc != h->crc) {
             err = WORLD_BAD_CRC;
         } else {
-            err = worldCheck(data);
+            err = worldCheck(data, size);
             displayProgress(LOADING_CHECK);
         }
     }
     if (err != WORLD_OK) {
-        ti_Close(handle);
-        handle = 0;
+        ti_Close(h_new);            // the open world stays
         return err;
     }
+    worldClose(0);
+    handle = h_new;
+    world_size = size;
     world = h;
     return WORLD_OK;
+}
+
+uint8_t worldSelect(uint8_t i) {
+    const uint8_t err = worldOpen(world_list[i].appvar);
+    if (err == WORLD_OK) {
+        world_current = i;
+    }
+    return err;
 }
 
 const char *worldError(uint8_t err) {
     switch (err) {
         // at most 26 characters: one line of the home screen
-        case WORLD_MISSING:    return "No world AppVar " WORLD_APPVAR;
+        case WORLD_MISSING:    return "World AppVar not found";
         case WORLD_BAD_HEADER: return "Not a world, or other ver.";
         case WORLD_BAD_CRC:    return "World corrupted (checksum)";
         case WORLD_BAD_DATA:   return "World has bad data";
@@ -192,11 +248,22 @@ const char *worldError(uint8_t err) {
 }
 
 uint8_t worldStart(void) {
-    const uint8_t err = worldOpen(WORLD_APPVAR);
-    if (err == WORLD_OK) {
-        return 1;
+    worldScan();
+    if (world_count == 0) {
+        displayError("No worlds found.", "Send a world AppVar (.8xv)");
+        return 0;
     }
-    displayError(worldError(err), NULL);
+    uint8_t first_err = WORLD_OK;
+    for (uint8_t i = 0; i < world_count; i++) {
+        const uint8_t err = worldSelect(i);
+        if (err == WORLD_OK) {
+            return 1;
+        }
+        if (first_err == WORLD_OK) {
+            first_err = err;
+        }
+    }
+    displayError(worldError(first_err), world_list[0].appvar);
     return 0;
 }
 
@@ -221,14 +288,15 @@ const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count, uint8_t 
 
 // ---- closing ----
 
-uint8_t worldClose(void) {
+uint8_t worldClose(uint8_t save) {
     if (!handle) {
         return 0;
     }
     uint8_t saved = 0;
     const int archived = ti_IsArchived(handle);
     world = NULL;   // the AppVar may move from here on
-    if (!archived || ti_SetArchiveStatus(false, handle)) {
+    world_current = WORLD_NONE;
+    if (save && (!archived || ti_SetArchiveStatus(false, handle))) {
         uint8_t *data = ti_GetDataPtr(handle);
         world_header_t *h = (world_header_t *)data;
         uint8_t day, month, seconds, minutes, hours;

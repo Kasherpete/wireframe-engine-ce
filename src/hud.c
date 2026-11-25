@@ -1,13 +1,16 @@
-// The HUD (hud.h): "make hud" builds only.
-#include "hud.h"
-
-#ifdef SHOW_HUD
+// The HUD (hud.h).
 #include <fontlibc.h>
 
+#include "hud.h"
 #include "pico8_font.h"
 
+#ifdef SHOW_HUD
+uint8_t hud_shown = 1;
 uint24_t prof_sorts, prof_loads, prof_chunks, prof_records, prof_occluded;
 uint32_t prof_sort_cycles, prof_load_cycles, prof_cull_cycles, prof_proj_cycles, prof_fill_cycles, prof_occ_cycles;
+#else
+uint8_t hud_shown = 0;
+#endif
 
 
 #define CYCLES_PER_TENTH_MS 4800
@@ -42,5 +45,3 @@ void hudDraw(uint8_t fps, uint24_t draw_cycles, uint24_t frame_cycles) {
     drawMs(11, "d ", draw_cycles);
     drawMs(19, "f ", frame_cycles);
 }
-
-#endif

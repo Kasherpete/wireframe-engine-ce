@@ -46,6 +46,10 @@
 // BUFFER_1 would keep white side bars
 void displayLoading(void);
 
+// while running (between frames, after swapBuffer): the loading screen again, from an empty bar,
+// shown until displayLoadingEnd after the next swapBuffer (switching worlds)
+void displayReload(void);
+
 // the progress bar, out of LOADING_FULL: filled to done (never back). Nothing unless the loading
 // screen is up. The steps, by measured time (the CRC is ~80% of startup in the test world, ~95% in
 // the dense one): up to LOADING_CRC during the CRC, then the values below
