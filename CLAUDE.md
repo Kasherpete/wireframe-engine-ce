@@ -6,6 +6,8 @@ Voxel 3D renderer (filled, shaded faces, hidden surface removal) for the TI-84 P
 |---|---|
 | `src/main.c` | `main`: startup and the frame loop, nothing else |
 | `src/title.{h,c}` | title screen: menu (play, settings: nothing yet, quit) drawn with graphx text over the world seen from the spawn, camera turning slowly right (`titleUpdate`, `titleDraw`); `main` runs it in the frame loop, all rows de-interlaced while it shows |
+| `src/title_font.h` | **generated** by `utils/gen_title_font.py` (Pillow) from `font/minecraft-legacy-edition.otf`: the graphx font of the title buttons; don't edit |
+| `src/pico8_font.{h,c}` | the PICO-8 font (`font/myfont.inc`, fontlibc) for the HUD and the title (edition box, corner texts with fontlib; the splash reads its glyphs with `pico8Glyph`); lowercase shows as its capitals |
 | `src/display.{h,c}` | 4bpp setup, loading screen with progress bar (`displayLoading`, `displayProgress`, `displayLoadingEnd`), startup errors (`displayError`), `displayInit`, VRAM frame addresses, `swapBuffer`, `waitForBufferScan`, full-frame de-interlace (startup) |
 | `src/colours.{h,c}` | `palette`, `materials[]` (plain, then fogged), `ground_colour3`, `bg_rows` (`coloursInit`) |
 | `src/player.{h,c}` | player state, keys, movement, jump/crouch, collision response (`playerSpawn`, `playerUpdate`) |
