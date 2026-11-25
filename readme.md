@@ -144,6 +144,10 @@ compiler path to `CEdev/bin/ez80-clang` and the include path to `CEdev/include` 
 - [ ] Write runtime world changes back to the file
 - [x] Distance fog (on in every build)
 - [x] Use a scratch AppVar for more memory (bss is nearly full)
+- [ ] Add main menu (ideally with a world rendering in the background) with "Play", "Settings", and "Quit"
+- [ ] Add world menu, and let users select world to load
+- [ ] Add settings menu with render distance and FPS toggle
+- [ ] Remove draw time from HUD, add voxel count
 
 ## Changelog
 

@@ -1,4 +1,4 @@
-// Voxel engine demo: walk around the world in the WORLD AppVar. [clear] quits.
+// Voxel engine demo: a title screen, then walk around the world in the WORLD AppVar. [clear] quits.
 //
 // A frame: move the player, set up the camera, load chunks that came into view, project and
 // rasterize the scene (before the wait: none of it touches a frame buffer, so it overlaps the LCD
@@ -15,6 +15,7 @@
 #include "hud.h"
 #include "player.h"
 #include "scene.h"
+#include "title.h"
 #include "world.h"
 
 #define MAX_DT  (CLOCKS_PER_SEC / 8)  // clamp the frame time so a stall does not teleport the player
@@ -42,7 +43,8 @@ int main(void) {
         return 0;
     }
     coloursInit();
-    playerSpawn();
+    playerSpawn();              // the title screen first, from the spawn; [play] spawns again
+    uint8_t title = 1;
 
     hudInit();
     displayInit();
@@ -87,7 +89,18 @@ int main(void) {
             start_time = now;
         }
 
-        playerUpdate(dt);
+        if (title) {
+            const uint8_t choice = titleUpdate(dt);
+            if (choice == TITLE_QUIT) {
+                break;
+            }
+            if (choice == TITLE_PLAY) {
+                playerSpawn();
+                title = 0;
+            }
+        } else {
+            playerUpdate(dt);
+        }
         setupCamera();
         windowFollow();
 
@@ -106,10 +119,14 @@ int main(void) {
         drawSpans();
         const uint24_t draw_cycles = CYCLES() - draw_start + project_cycles;
 
-        hudDraw(fps, draw_cycles, frame_cycles);
-
-        // copy the drawn rows to the rows below, and show the frame
-        deinterlaceFrame(HUD_ROWS);
+        // copy the drawn rows to the rows below (all of them under the menu text), and show the frame
+        if (title) {
+            titleDraw();
+            deinterlaceFrame(GFX_LCD_HEIGHT);
+        } else {
+            hudDraw(fps, draw_cycles, frame_cycles);
+            deinterlaceFrame(HUD_ROWS);
+        }
         swapBuffer();
         if (loading) {
             displayLoadingEnd();     // the first frame replaces the loading screen
