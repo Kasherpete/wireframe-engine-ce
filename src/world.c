@@ -29,6 +29,12 @@ static uint16_t world_size;            // bytes
 world_entry_t world_list[WORLD_LIST_MAX];
 uint8_t world_count = 0;
 uint8_t world_current = WORLD_NONE;
+static char open_appvar[9];            // the open world's AppVar ("" if none)
+
+// AppVars moved to RAM (renamed) or created while graphx runs: archived by worldArchivePending
+// after gfx_End (archiving may need a garbage collection, which shows its own screen)
+static char pending[WORLD_LIST_MAX][9];
+static uint8_t pending_count = 0;
 
 
 // ---- CRC-32 ----
@@ -158,7 +164,7 @@ static uint8_t playedLater(const world_date_t *a, const world_date_t *b) {
 
 void worldScan(void) {
     world_count = 0;
-    world_current = WORLD_NONE;
+    world_current = WORLD_NONE;     // found again below, by its AppVar
     void *vat = NULL;
     const char *var;
     while (world_count < WORLD_LIST_MAX && (var = ti_Detect(&vat, WORLD_MAGIC)) != NULL) {
@@ -183,6 +189,18 @@ void worldScan(void) {
         }
         world_list[i] = e;
     }
+    if (handle) {
+        world_current = worldFind(open_appvar);
+    }
+}
+
+uint8_t worldFind(const char *appvar) {
+    for (uint8_t i = 0; i < world_count; i++) {
+        if (strcmp(world_list[i].appvar, appvar) == 0) {
+            return i;
+        }
+    }
+    return WORLD_NONE;
 }
 
 uint8_t worldOpen(const char *appvar) {
@@ -222,6 +240,7 @@ uint8_t worldOpen(const char *appvar) {
         return err;
     }
     worldClose(0);
+    strncpy(open_appvar, appvar, sizeof open_appvar - 1);
     handle = h_new;
     world_size = size;
     world = h;
@@ -243,6 +262,7 @@ const char *worldError(uint8_t err) {
         case WORLD_BAD_HEADER: return "Not a world, or other ver.";
         case WORLD_BAD_CRC:    return "World corrupted (checksum)";
         case WORLD_BAD_DATA:   return "World has bad data";
+        case WORLD_NO_MEMORY:  return "Not enough free RAM";
         default:               return "World OK";
     }
 }
@@ -317,5 +337,148 @@ uint8_t worldClose(uint8_t save) {
     }
     ti_Close(handle);
     handle = 0;
+    open_appvar[0] = '\0';
     return saved;
+}
+
+
+// ---- renaming and creating ----
+// Creating, deleting or unarchiving a variable may move the others in RAM, the open world among
+// them, so its handle is closed around that and the world opened again (no checks: it is the same
+// file), and the list scanned again. The chunk window holds copies, so nothing else points into it
+
+static void detach(void) {
+    if (handle) {
+        ti_Close(handle);
+        handle = 0;
+        world = NULL;
+    }
+}
+
+static void reattach(void) {
+    if (open_appvar[0]) {
+        handle = ti_Open(open_appvar, "r");
+        world = handle ? ti_GetDataPtr(handle) : NULL;
+    }
+    worldScan();
+}
+
+static void addPending(const char *appvar) {
+    for (uint8_t i = 0; i < pending_count; i++) {
+        if (strcmp(pending[i], appvar) == 0) {
+            return;
+        }
+    }
+    if (pending_count < WORLD_LIST_MAX) {
+        strncpy(pending[pending_count], appvar, 8);
+        pending[pending_count][8] = '\0';
+        pending_count++;
+    }
+}
+
+// the header's name from name (cut to WORLD_NAME_LEN - 1, zero filled), and the checksum
+static void setName(uint8_t *data, uint24_t size, const char *name) {
+    world_header_t *h = (world_header_t *)data;
+    memset(h->name, 0, WORLD_NAME_LEN);
+    strncpy(h->name, name, WORLD_NAME_LEN - 1);
+    h->crc = crc32(0, data + CRC_START, size - CRC_START);
+}
+
+uint8_t worldRename(uint8_t i, const char *name) {
+    char appvar[9];
+    strcpy(appvar, world_list[i].appvar);
+    detach();
+    uint8_t err = WORLD_MISSING;
+    const uint8_t h = ti_Open(appvar, "r");
+    if (h) {
+        const world_header_t *hd = ti_GetDataPtr(h);
+        const uint24_t size = ti_GetSize(h);
+        const uint8_t archived = ti_IsArchived(h);
+        if (size < sizeof(world_header_t) || hd->version != WORLD_VERSION) {
+            err = WORLD_BAD_HEADER;     // the name may be elsewhere in another version
+        } else if (ti_IsArchived(h) && !ti_SetArchiveStatus(false, h)) {
+            err = WORLD_NO_MEMORY;
+        } else {
+            if (archived) {
+                addPending(appvar);     // archived again at exit
+            }
+            setName(ti_GetDataPtr(h), size, name);
+            err = WORLD_OK;
+        }
+        ti_Close(h);
+    }
+    reattach();
+    return err;
+}
+
+#define NEW_SIZE     8          // chunks per side of a new world (64 x 64 cells)
+#define NEW_GROUND   3          // green
+#define NEW_CHUNKS   (NEW_SIZE * NEW_SIZE)
+#define NEW_BYTES    (sizeof(world_header_t) + NEW_CHUNKS * sizeof(world_chunk_t))
+
+uint8_t worldCreate(const char *name, char *appvar) {
+    // the first free AppVar name of WORLD1 .. WORLD99
+    uint8_t n;
+    for (n = 1; n < 100; n++) {
+        char *p = appvar;
+        memcpy(p, "WORLD", 5);
+        p += 5;
+        if (n >= 10) {
+            *p++ = (char)('0' + n / 10);
+        }
+        *p++ = (char)('0' + n % 10);
+        *p = '\0';
+        const uint8_t h = ti_Open(appvar, "r");
+        if (!h) {
+            break;
+        }
+        ti_Close(h);
+    }
+    if (n == 100) {
+        return WORLD_NO_MEMORY;
+    }
+
+    detach();
+    uint8_t err = WORLD_NO_MEMORY;
+    const uint8_t h = ti_Open(appvar, "w");
+    if (h) {
+        world_header_t hd;
+        memset(&hd, 0, sizeof hd);
+        memcpy(hd.magic, WORLD_MAGIC, 4);
+        hd.version = WORLD_VERSION;
+        hd.size_x = hd.size_z = NEW_SIZE;
+        hd.spawn_x = hd.spawn_z = NEW_SIZE * CHUNK_SIZE / 2;
+        hd.ground = NEW_GROUND;
+        // every chunk empty: no records, at the end of the index
+        const world_chunk_t c = {NEW_BYTES, 0, WORLD_RUNS_NONE};
+        uint8_t ok = ti_Write(&hd, sizeof hd, 1, h) == 1;
+        for (uint8_t k = 0; ok && k < NEW_CHUNKS; k++) {
+            ok = ti_Write(&c, sizeof c, 1, h) == 1;
+        }
+        if (ok) {
+            ti_Rewind(h);               // ti_GetDataPtr points at the current offset
+            setName(ti_GetDataPtr(h), NEW_BYTES, name);
+            addPending(appvar);
+            err = WORLD_OK;
+        }
+        ti_Close(h);
+        if (!ok) {
+            ti_Delete(appvar);
+        }
+    }
+    reattach();
+    return err;
+}
+
+void worldArchivePending(void) {
+    for (uint8_t i = 0; i < pending_count; i++) {
+        const uint8_t h = ti_Open(pending[i], "r");
+        if (h) {
+            if (!ti_IsArchived(h)) {
+                ti_SetArchiveStatus(true, h);
+            }
+            ti_Close(h);
+        }
+    }
+    pending_count = 0;
 }

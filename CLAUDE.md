@@ -5,7 +5,7 @@ Voxel 3D renderer (filled, shaded faces, hidden surface removal) for the TI-84 P
 | File | Contents |
 |---|---|
 | `src/main.c` | `main`: startup and the frame loop, nothing else |
-| `src/title.{h,c}` | title screen: menus drawn with graphx text over the world seen from the spawn, camera turning slowly right (`titleUpdate`, `titleDraw`): main (play, settings, quit), world list (`world_list`, `titleWorld`, `titleError`), settings (render distance 8-24, fog, FPS info, GitHub star note; applied at once, not saved). [clear] goes back, quits from the main menu. `main` runs it in the frame loop, all rows de-interlaced while it shows |
+| `src/title.{h,c}` | title screen: menus drawn with graphx text over the world seen from the spawn, camera turning slowly right (`titleUpdate`, `titleDraw`): main (play, settings, quit), world list (`world_list`, `titleWorld`, `titleError`; New and Rename go to a name screen typing like alpha lock, [alpha] cycles capitals/small/digits), settings (render distance 8-24, fog, FPS info, GitHub star note; applied at once, not saved). [clear] goes back, quits from the main menu. PICO-8 text sits on black boxes (`pico8Boxed`; the splash on a sheared band) to read over the world. `main` runs it in the frame loop, all rows de-interlaced while it shows; keys are latched by `titlePoll` (also called mid-frame) so taps shorter than a frame count |
 | `src/title_font.h` | **generated** by `utils/gen_title_font.py` (Pillow) from `font/minecraft-legacy-edition.otf`: the graphx font of the title buttons; don't edit |
 | `src/pico8_font.{h,c}` | the PICO-8 font (`font/myfont.inc`, fontlibc) for the HUD and the title (edition box, corner texts with fontlib; the splash reads its glyphs with `pico8Glyph`); lowercase shows as its capitals |
 | `src/display.{h,c}` | 4bpp setup, loading screen with progress bar (`displayLoading`, `displayProgress`, `displayLoadingEnd`; `displayReload` shows it again when switching worlds), startup errors (`displayError`), `displayInit`, VRAM frame addresses, `swapBuffer`, `waitForBufferScan`, full-frame de-interlace (startup) |
@@ -16,8 +16,8 @@ Voxel 3D renderer (filled, shaded faces, hidden surface removal) for the TI-84 P
 | `src/chunks.{h,c}` | chunk window (`windowAlloc`/`windowFree`: chunk memory, `windowInit`, `windowFollow`, `windowChunk`), `sortChunk`, `computeExposure`, painter's-order notes |
 | `src/scene.{h,c}` | `projected[]` (one batch), `cullChunks`, `projectScene` (projects and fills chunk by chunk, chunk occlusion), LOD colour table (`sceneInit`) |
 | `src/occlude.S` | `chunkSeen` (is a chunk's screen rectangle still open?), `cullLoop` (the per-chunk loop of `cullChunks`) |
-| `src/hud.{h,c}` | HUD (FPS, D/F timings) while `hud_shown` (settings; default on in `make hud`), `CYCLES()`; `PROF()` and the profiling counters `make hud` only |
-| `src/world.{h,c}` | world file (AppVar): format structs, `worldScan` (every AppVar whose data starts with `VXWD`, most recently played first), `worldOpen` (CRC, range checks; keeps the open world on error), `worldSelect`, `worldStart` (open the newest that passes, or report), chunk lookup, `worldClose(save)` |
+| `src/hud.{h,c}` | HUD (FPS, V = boxes projected, F = frame time) while `hud_shown` (settings, default off), `CYCLES()`; `PROF()` and the profiling counters only with `-DPROFILE` (the bench and collision scripts add it) |
+| `src/world.{h,c}` | world file (AppVar): format structs, `worldScan` (every AppVar whose data starts with `VXWD`, most recently played first), `worldOpen` (CRC, range checks; keeps the open world on error), `worldSelect`, `worldStart` (open the newest that passes, or report), chunk lookup, `worldClose(save)`, `worldRename`/`worldCreate` (title; leave the AppVar in RAM, `worldArchivePending` archives it after `gfx_End`) |
 | `src/chunk.S` | per-voxel loops of chunk loading and exposure |
 | `src/project.S` | `projectRecords`: per-record culling, facing test, projection, near-plane clipping, level of detail, fog |
 | `src/fill.S`, `fill.h` | filled rasterizer with hidden surface removal; its header comment is the detailed description |
@@ -40,12 +40,11 @@ Voxel 3D renderer (filled, shaded faces, hidden surface removal) for the TI-84 P
 
 ```sh
 make          # release -> bin/DEMOPRGM.8xp, also builds bin/WORLD.8xv (needed at runtime)
-make hud      # HUD (FPS, D/F timings) on by default, plus the profiling counters
-make debug    # -O0, dbg_printf enabled (combine: make debug hud)
+make debug    # -O0, dbg_printf enabled
 ```
 
 - The build must have no warnings. `GFX_LCD_WIDTH/HEIGHT` are `#undef`ed before redefinition; the makefile passes `--no-warn-execstack`.
-- The variant is written to `obj/variant`, so switching rebuilds C files. `.S` files don't depend on it: don't use `SHOW_HUD`/`DEBUG` there.
+- The variant is written to `obj/variant`, so switching rebuilds C files. `.S` files don't depend on it: don't use `PROFILE`/`DEBUG` there.
 - `.S` objects don't track the headers they include either: after changing `engine.h`, `projection_tables.h` (`gen_tables.py`), `chunks.h` or `fill.h`, `make clean`, or a stale object links (an old `camera.S` built for range 16 silently produced wrong rotation tables).
 - `.S` files go through the C preprocessor, then the GNU z80 assembler. Keep `;` comments free of apostrophes, and shared `#define` values must not start with `(` (read as a memory load).
 - After adding or removing a header, `make clean`.
@@ -95,7 +94,7 @@ VRAM 0xD40000-0xD657FF is four 38,400-byte (0x9600) 4bpp frames: `BUFFER_1`, `BU
    - Don't poll `lcd_UpBaseCurr` instead: it stops changing while the LCD is idle, so frames under ~5 ms swapped twice per refresh and drew into the displayed buffer.
    - `swapBuffer` must write `lcd_UpBase` *before* acknowledging the flag, or a refresh in between draws into the displayed buffer.
 6. `drawSpans()`: background in still-open rows, then the spans.
-7. If `hud_shown` (settings, or `make hud`): draw the HUD (`D` = this frame's scene work, `F` = previous frame's total excluding the wait). [clear] in game quits; on the title, `titleUpdate` handles it.
+7. If `hud_shown` (settings): draw the HUD (`V` = boxes projected this frame, `num_projected`; `F` = previous frame's total excluding the wait). [clear] in game quits; on the title, `titleUpdate` handles it.
 8. `deinterlaceFrame(HUD_ROWS)`, `swapBuffer`.
 
 ## Movement
@@ -147,6 +146,7 @@ VRAM 0xD40000-0xD657FF is four 38,400-byte (0x9600) 4bpp frames: `BUFFER_1`, `BU
 - **Exposed faces are in the file** (computed by `make_world.py`: ground solid, outside the world empty), so loading is a copy. `computeExposure` is for runtime changes and must agree with the generator (the bench checks the inner 3x3 chunks after each load).
 - `worldOpen` (behind the loading screen; the CRC is ~2 s for 36 KB, in 512-byte blocks that advance the progress bar) checks header, CRC, every chunk offset and every voxel's range, so nothing later does. Bounds that matter: x + 8 z < 64, y in -96...95, material < 16, faces < 64. On error `worldStart` reports it through `displayError` (ends graphx, prints on the home screen, waits for a key) and `main` exits.
 - **Switching worlds** (title, Play): `worldSelect` behind `displayReload`'s loading screen, then `coloursInit`, `windowInit`, `playerSpawn`; on error the open world stays and the list shows why. Only one world is open at a time.
+- **Renaming and creating** (title): `worldRename` unarchives the world if needed (RAM the size of the world), writes the name and recomputes the CRC (~2 s for 36 KB); `worldCreate` writes an empty 8x8-chunk world on a green ground plane to the first free `WORLDn`. Both close the open world's handle first and reopen it after (creating or unarchiving a variable may move it), then `worldScan` (finds `world_current` again by AppVar). Neither archives while graphx runs (a garbage collection would draw over it): `worldArchivePending`, after `worldClose` at exit. `ti_GetDataPtr` points at the current offset: `ti_Rewind` before using it as the start after writing.
 - `worldClose(save)` (after `gfx_End`; `save` only if a world was played, not just shown behind the title) writes the RTC date as last played and updates the CRC; an archived world is unarchived and re-archived (needs free RAM the size of the world; may show the OS garbage collection screen).
 - **Chunks:** columns of 8x8 cells, any height, at most 255 records (voxels and runs). RAM holds a 7x7 window: 49 slots of 1305 bytes (slot `(cx mod 7) * 7 + (cz mod 7)`, pointers in `slot[]`), `win[49]` by window position. Slots 0-19 are in bss, 20-48 in `DBL_BUF2` (VRAM). (Only the `-DFILL_REFERENCE` bench build has fewer in VRAM and the rest in a scratch AppVar `VXSCRTCH`.) Records are 5 bytes {x, Y, z, material, exposed}, x/z chunk local, Y = y cell + 1. A chunk's grid index bias is `cam_bias_x + 8 cx + 1`, passed to `projectRecords` and `sortRecords`.
 - `windowAlloc` (before `worldStart`) sets the slot pointers, and in the reference build creates the AppVar (creating a variable may move the world AppVar if it is in RAM; on failure `displayError` prints "Not enough free RAM" and `main` exits); `windowFree` deletes any `VXSCRTCH` (also one left by an older version) after `gfx_End`, before `worldClose`. Harness `main`s (bench, collision test) call both.

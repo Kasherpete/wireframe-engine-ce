@@ -4,12 +4,11 @@
 #include "hud.h"
 #include "pico8_font.h"
 
-#ifdef SHOW_HUD
-uint8_t hud_shown = 1;
+uint8_t hud_shown = 0;
+
+#ifdef PROFILE
 uint24_t prof_sorts, prof_loads, prof_chunks, prof_records, prof_occluded;
 uint32_t prof_sort_cycles, prof_load_cycles, prof_cull_cycles, prof_proj_cycles, prof_fill_cycles, prof_occ_cycles;
-#else
-uint8_t hud_shown = 0;
 #endif
 
 
@@ -38,10 +37,12 @@ static void drawMs(uint8_t y, const char *label, uint24_t cycles) {
 }
 
 
-void hudDraw(uint8_t fps, uint24_t draw_cycles, uint24_t frame_cycles) {
+void hudDraw(uint8_t fps, uint24_t voxels, uint24_t frame_cycles) {
     fontlib_SetColors(0x00, 0xff);      // the title screen draws in other colours
     fontlib_SetCursorPosition(3, 3);
     fontlib_DrawUInt(fps, 2);
-    drawMs(11, "d ", draw_cycles);
+    fontlib_SetCursorPosition(3, 11);
+    fontlib_DrawString("v ");
+    fontlib_DrawUInt(voxels, 1);
     drawMs(19, "f ", frame_cycles);
 }

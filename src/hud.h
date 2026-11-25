@@ -1,7 +1,7 @@
-// The on-screen HUD (FPS and frame times), shown while hud_shown is set (the title's settings
-// toggle it; on by default in "make hud" builds), and the cycle counters behind it. The per-phase
-// profiling counters (PROF()) are only in "make hud" builds (SHOW_HUD); otherwise PROF() is empty
-// and compiles away. The text costs about 60k cycles, 1.2 ms, per frame while shown.
+// The on-screen HUD (FPS, voxels on screen, frame time), shown while hud_shown is set (the title's
+// settings toggle it), and the cycle counter behind it. The per-phase profiling counters (PROF())
+// are only in builds with -DPROFILE (the bench); otherwise PROF() is empty and compiles away. The
+// text costs about 60k cycles, 1.2 ms, per frame while shown.
 #ifndef HUD_H
 #define HUD_H
 
@@ -20,10 +20,11 @@ extern uint8_t hud_shown;
 
 // the font and the cycle counter
 void hudInit(void);
-// FPS, D = this frame's scene work, F = the previous frame's total excluding the wait for the LCD
-void hudDraw(uint8_t fps, uint24_t draw_cycles, uint24_t frame_cycles);
+// FPS, V = boxes projected this frame (voxels and runs that passed culling and the facing test),
+// F = the previous frame's total excluding the wait for the LCD
+void hudDraw(uint8_t fps, uint24_t voxels, uint24_t frame_cycles);
 
-#ifdef SHOW_HUD
+#ifdef PROFILE
 #define PROF(...)  __VA_ARGS__
 
 // per-phase totals since startup (the bench reads and resets them)

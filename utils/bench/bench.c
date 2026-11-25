@@ -1,5 +1,5 @@
 // Benchmark and verification harness (utils/bench/run_bench.sh). Replaces src/main.c in a scratch
-// copy of the sources, and is built with SHOW_HUD for the cycle counters.
+// copy of the sources, and is built with PROFILE for the cycle counters.
 //
 // Renders BENCH_VIEWS camera views from a fixed seed (positions in the BENCH_XMIN .. BENCH_ZMAX
 // box of cells, 0.5 .. 2.5 units up, a quarter of them exactly N/E/S/W) and shows the total

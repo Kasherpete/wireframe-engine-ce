@@ -131,26 +131,28 @@ int main(void) {
         }
 
         // cull, project and rasterize before the wait (fill.h: unless the span list overflows)
-        const uint24_t project_start = CYCLES();
         projectScene(draw_buffer_ctrl);
-        const uint24_t project_cycles = CYCLES() - project_start;
+        if (title) {
+            titlePoll();
+        }
 
         // idle time, so it is left out of the frame time
         uint24_t wait_cycles = CYCLES();
         waitForBufferScan();
         wait_cycles = CYCLES() - wait_cycles;
+        if (title) {
+            titlePoll();
+        }
 
         // every viewport pixel of the field: the visible parts of the boxes and the background
-        const uint24_t draw_start = CYCLES();
         drawSpans();
-        const uint24_t draw_cycles = CYCLES() - draw_start + project_cycles;
 
         // copy the drawn rows to the rows below (all of them under the menu text), and show the frame
         if (title) {
             titleDraw();
             deinterlaceFrame(GFX_LCD_HEIGHT);
         } else if (hud_shown) {
-            hudDraw(fps, draw_cycles, frame_cycles);
+            hudDraw(fps, num_projected, frame_cycles);
             deinterlaceFrame(HUD_ROWS);
         } else {
             deinterlaceFrame(0);
@@ -170,5 +172,6 @@ int main(void) {
     gfx_End();
     windowFree();
     worldClose(played);
+    worldArchivePending();      // worlds renamed or created on the title
     return 0;
 }

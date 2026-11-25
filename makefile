@@ -18,15 +18,9 @@ CXXFLAGS = -Wall -Wextra -O3 -ffast-math
 EXTRA_PRE_LDFLAGS = --no-warn-execstack
 EXTRA_LDFLAGS = --no-warn-execstack
 
-# "make hud" (or "make debug hud") adds the on-screen HUD: FPS, timings and the buffer number.
-# Plain "make" leaves it out, along with its per-frame cost (about 1.2 ms of fontlib drawing).
-ifneq ($(filter hud,$(MAKECMDGOALS)),)
-CFLAGS += -DSHOW_HUD=1
-endif
-
-# Objects do not depend on compiler flags, so switching between make, make debug and make hud
-# would link stale objects. obj/variant changes whenever the variant does, forcing a rebuild.
-VARIANT := $(or $(sort $(filter debug hud,$(MAKECMDGOALS))),release)
+# Objects do not depend on compiler flags, so switching between make and make debug would link
+# stale objects. obj/variant changes whenever the variant does, forcing a rebuild.
+VARIANT := $(or $(filter debug,$(MAKECMDGOALS)),release)
 ifeq ($(filter clean gfx version,$(MAKECMDGOALS)),)
 $(shell mkdir -p obj && (test "$$(cat obj/variant 2>/dev/null)" = "$(VARIANT)" || echo "$(VARIANT)" > obj/variant))
 DEPS = obj/variant
@@ -39,9 +33,8 @@ endif
 
 include $(shell cedev-config --makefile)
 
-.PHONY: default hud world
+.PHONY: default world
 default: $(BUILD) world
-hud: $(BUILD) world
 
 world: $(BINDIR)/WORLD.8xv
 $(BINDIR)/WORLD.8xv: utils/make_world.py

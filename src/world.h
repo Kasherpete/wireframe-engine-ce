@@ -39,6 +39,7 @@
 #define WORLD_BAD_HEADER 2         // not a world file, or another format version
 #define WORLD_BAD_CRC    3         // the checksum does not match: the file is corrupted
 #define WORLD_BAD_DATA   4         // the checksum matches, but the contents are out of range
+#define WORLD_NO_MEMORY  5         // worldRename, worldCreate: not enough free RAM (or no free name)
 
 typedef struct {
     uint16_t year;                 // 0: never played
@@ -95,8 +96,10 @@ extern uint8_t world_current;      // world_list index of the open world, WORLD_
 #define WORLD_NONE       0xff
 
 // Lists the AppVars (RAM or archive) whose data starts with WORLD_MAGIC, most recently played
-// first. Before any world is opened (world_current is reset)
+// first, and finds the open world among them again (world_current)
 void worldScan(void);
+// the world_list index of the AppVar, WORLD_NONE if it is not listed
+uint8_t worldFind(const char *appvar);
 // Opens the AppVar, checks the header and the checksum, and checks that every chunk lies inside
 // the file and every voxel is in range (so the engine needs no checks later). Then it replaces the
 // open world (closed unsaved). On an error the open world stays as it was. WORLD_OK or an error
@@ -116,6 +119,19 @@ const world_voxel_t *worldChunk(int24_t cx, int24_t cz, uint8_t *count, uint8_t 
 // the world (otherwise the date is left as it was). Call it after gfx_End(): archiving may run a
 // garbage collection, which shows its own screen. Returns 0 if the date could not be saved
 uint8_t worldClose(uint8_t save);
+
+// While graphx runs (title screen): renames world_list[i] (name cut to WORLD_NAME_LEN - 1
+// characters) and updates its checksum. An archived world is moved to RAM for it (needs free RAM
+// the size of the world) and archived again by worldArchivePending. Then the list is scanned again
+// (indices may change: worldFind). WORLD_OK, WORLD_NO_MEMORY or WORLD_BAD_HEADER
+uint8_t worldRename(uint8_t i, const char *name);
+// Creates an empty world (8 x 8 chunks on a green ground plane, spawn in the middle) in a new RAM
+// AppVar WORLDn (the first free name, into appvar, 9 bytes), archived by worldArchivePending; then
+// scans the list again. WORLD_OK or WORLD_NO_MEMORY
+uint8_t worldCreate(const char *name, char *appvar);
+// After gfx_End and worldClose: archives the AppVars worldRename and worldCreate left in RAM (may
+// show the OS garbage collection screen; one that does not fit stays in RAM)
+void worldArchivePending(void);
 
 // CRC-32 as zlib computes it, continuing from crc (0 to start)
 uint32_t crc32(uint32_t crc, const void *data, size_t len);

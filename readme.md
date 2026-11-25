@@ -53,8 +53,7 @@ extract `ez80-clang` and `ez80-link` into `CEdev/bin`. Python 3 is used to gener
 
 ```sh
 make          # bin/DEMOPRGM.8xp and the test world bin/WORLD.8xv
-make hud      # the same with an on-screen HUD: FPS, scene time (d) and frame time (f)
-make debug    # -O0 with dbg_printf (combine: make debug hud)
+make debug    # -O0 with dbg_printf
 ```
 
 Send `DEMOPRGM.8xp`, `WORLD.8xv` and the [CE C libraries](https://github.com/CE-Programming/libraries/releases)
@@ -90,7 +89,7 @@ the last played date when you quit.
 | `src/chunks.{h,c}` | the chunk window: loading, painter's sort, face exposure |
 | `src/scene.{h,c}` | chunk culling and projection of the visible voxels |
 | `src/world.{h,c}` | the world file |
-| `src/hud.{h,c}` | HUD and profiling counters (`make hud` only) |
+| `src/hud.{h,c}` | HUD (FPS, voxels on screen, frame time; toggled in settings) and the bench's profiling counters |
 | `src/project.S` | per-voxel culling and projection |
 | `src/fill.S`, `fill.h` | the rasterizer; `fill_ref.c` is the same algorithm in C, for testing |
 | `src/sort.S`, `chunk.S`, `deinterlace.S` | sorting, chunk loading and exposure, the row copy |
