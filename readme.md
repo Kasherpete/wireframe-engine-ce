@@ -1,4 +1,4 @@
-# Voxel Engine CE
+# CALCRAFT
 
 A real-time voxel renderer for the **TI-84 Plus CE**: filled, shaded faces with hidden surface
 removal, a chunked world streamed from an AppVar, and a first-person player that walks, jumps and
