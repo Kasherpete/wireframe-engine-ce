@@ -1794,6 +1794,8 @@ _deinterlaceFrame:
 	.global	_lod_slot
 _lod_slot:	.zero	64		; MAT_* slot of a rectangle by FACE_* bits (scene.c)
 	.balign	GAP_BLOCK
+	.global	_fill_rows		; read by project.S (level of detail: is the centre covered?)
+_fill_rows:
 .Lrows:		.zero	GAP_BLOCK * VIEW_H
 	.balign	16
 .Lfaces_axis:	.zero	6 * 16		; .Lfaces_gen for the AXIS layout (.Laxis_table)

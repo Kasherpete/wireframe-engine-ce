@@ -116,6 +116,10 @@ void projectScene(uint24_t base) {
     PROF(prof_cull_cycles += CYCLES() - tc;)
     fillBegin(base);
     num_projected = 0;
+    // boxes against MAX_PROJECTED: those kept, and the rectangles project.S skipped as hidden, so
+    // the cap stops a frame where it did before they were skipped (else a dense view goes on to
+    // farther chunks and costs more)
+    uint24_t used = 0;
     // the eye height in 1/SUB units, rounded down (the 16.16 value >> 9 from its bytes)
     const int24_t eye = (int24_t)(*(const int24_t *)((const uint8_t *)&player_y + 1) >> 1);
 #ifdef FILL_REFERENCE
@@ -130,6 +134,10 @@ void projectScene(uint24_t base) {
         }
         if (!chunk_visible[w]) {
             continue;
+        }
+        if (used >= MAX_PROJECTED) {
+            k--;                        // the cap, reached by skipped rectangles: this chunk is
+            break;                      // not done (chunks_done)
         }
         if (occlusion_enabled) {
             // its records' cells ymin - 1 .. ymax - 1 span y from ymin - 2 to ymax - 1 (y down),
@@ -156,15 +164,17 @@ void projectScene(uint24_t base) {
         for (;;) {
             PROF(const uint24_t tp = CYCLES();)
             uint8_t room = PROJECT_BATCH;
-            if (MAX_PROJECTED - num_projected < PROJECT_BATCH) {
-                room = (uint8_t)(MAX_PROJECTED - num_projected);
+            if (MAX_PROJECTED - used < PROJECT_BATCH) {
+                room = (uint8_t)(MAX_PROJECTED - used);
             }
             project_full = 0;
+            project_hidden = 0;
             const uint8_t kept = projectRecords(rec, n, projected, room,
                                                 cam_bias_x + ch->ox, cam_bias_z + ch->oz,
                                                 run_faces[ch->mode]);
             PROF(const uint24_t tf = CYCLES(); prof_proj_cycles += tf - tp;)
             num_projected += kept;
+            used += kept + project_hidden;
 #ifdef FILL_REFERENCE
             for (uint8_t i = 0; i < kept && num_logged < PROJECTED_LOG; i++) {
                 projected_log[num_logged++] = projected[i];
@@ -178,7 +188,7 @@ void projectScene(uint24_t base) {
             if (!project_full) {
                 break;
             }
-            if (num_projected >= MAX_PROJECTED || !kept) {
+            if (used >= MAX_PROJECTED || !kept) {
                 goto done;              // the most boxes per frame (or a run would pass it)
             }
             // projected[] was full: the rest of the chunk

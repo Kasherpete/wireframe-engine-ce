@@ -156,9 +156,11 @@ typedef struct {
 // it used, in record order (0 if n or room is 0). When out[] is full it sets project_full (it does
 // not clear it) and stops: project_left is then the records not done, the last of rec[] (a run
 // that did not fit, or fit only its first piece, is not done: calling again with the rest is
-// exact, a piece drawn twice is hidden by itself the second time). Otherwise project_left is 0
+// exact, a piece drawn twice is hidden by itself the second time). Otherwise project_left is 0.
+// project_hidden counts the level of detail rectangles skipped because their centre pixel was
+// covered already (it does not clear it; at most n per call)
 extern uint8_t face_x[256], face_y[256], face_z[256];  // FACE_* towards the camera, by grid index
-extern uint8_t project_full, project_left;
+extern uint8_t project_full, project_left, project_hidden;
 uint8_t projectRecords(const int8_t (*rec)[5], uint8_t n, projected_box_t *out, uint8_t room,
                        int24_t bias_x, int24_t bias_z, uint8_t runs);
 

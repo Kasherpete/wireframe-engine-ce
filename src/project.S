@@ -64,6 +64,7 @@
 ; No apostrophes in comments: this file goes through the C preprocessor.
 
 #include "engine.h"
+#include "fill.h"		/* GAP_BLOCK: the row blocks of fill.S */
 
 #if TABLE_CULL_X_NUM != 5 || TABLE_CULL_X_DEN != 4
 #error "the horizontal culling below compares 4 x with 5 z"
@@ -518,7 +519,68 @@ _projectRecords:
 	ld	a, (hl)
 	dec	a
 	jp	z, .Lfull		; ground panel: a full box at any distance
-	call	.Llod_side		; a rectangle: keep only the side it shows most
+	; ---- a rectangle: skipped when its centre pixel is covered already. The rows hold what
+	; the nearer chunks drew (fillBoxes runs per batch, near to far), so a covered centre is
+	; behind them; a rectangle showing only around its centre is lost (an accepted artifact:
+	; about half the rectangles are hidden, and this saves their projection and fill) ----
+	ld	hl, (VAR(V_Z00))
+	ld	de, (VAR(V_CAM_KZMID3))
+	add	hl, de
+	LOG_Z				; bc, kept for .Lrect
+	ld	hl, (VAR(V_YT))
+	ld	de, 3 * SUB / 2
+	add	hl, de
+	LOG_ABS
+	PROJECT	CENTRE_Y		; the centre row
+	ld	de, VIEW_H
+	or	a, a
+	sbc	hl, de
+	jr	nc, .Lsee_keep		; outside the viewport (unsigned): keep it
+	add	hl, de
+	ld	h, l
+	ld	l, GAP_BLOCK
+	mlt	hl
+	ld	de, _fill_rows
+	add	hl, de			; its row block
+	ld	a, (hl)			; open intervals
+	or	a, a
+	jr	z, .Lsee_hidden		; the row is closed
+	push	hl
+	ld	hl, (VAR(V_X00))
+	ld	de, (VAR(V_CAM_KXMID3))
+	add	hl, de
+	LOG_ABS
+	PROJECT	CENTRE_X		; the centre column
+	ld	de, VIEW_X1 - VIEW_X0
+	or	a, a
+	sbc	hl, de
+	add	hl, de
+	ld	a, l
+	pop	hl
+	jr	nc, .Lsee_keep		; outside the viewport (unsigned): keep it
+	inc	l			; g1 of the first interval (blocks are 32-aligned: no carry)
+	inc	l
+	inc	l
+	inc	l
+	inc	l			; B_GAPS + 1
+.Lsee_find:
+	cp	a, (hl)			; x - g1: the first interval with g1 > x (at the latest the
+	jr	c, .Lsee_found		; sentinel, 255 > x)
+	inc	l
+	inc	l
+	jr	.Lsee_find
+.Lsee_found:
+	dec	l
+	cp	a, (hl)			; x - g0
+	jr	nc, .Lsee_keep		; g0 <= x: open
+.Lsee_hidden:				; counted against MAX_PROJECTED as if drawn (scene.c)
+	ld	hl, _project_hidden
+	inc	(hl)
+	jp	.Lskip
+.Lsee_keep:
+	push	bc
+	call	.Llod_side		; keep only the side it shows most
+	pop	bc
 	jp	.Lrect
 
 .Lfull:
@@ -628,12 +690,8 @@ _projectRecords:
 	; ==== level of detail: the rectangle of the x and y extent, at the centre depth. Each side
 	; projected straight into out[] (no logs kept: each is used once). Neighbouring boxes at
 	; the same depth project the same grid lines, so their rectangles meet exactly. A unit is at
-	; least 2.5 pixels within the far plane, so r > l and b > t ====
+	; least 2.5 pixels within the far plane, so r > l and b > t. bc = LOG_Z of the centre depth ====
 .Lrect:
-	ld	hl, (VAR(V_Z00))
-	ld	de, (VAR(V_CAM_KZMID3))
-	add	hl, de
-	LOG_Z				; bc
 	ld	hl, (VAR(V_X00))
 	ld	de, (VAR(V_CAM_KXMIN3))
 	add	hl, de
@@ -1799,6 +1857,8 @@ _cam_fog:	.zero	3
 _project_full:	.zero	1			; out[] is full (engine.h)
 	.global	_project_left
 _project_left:	.zero	1			; records not done (engine.h)
+	.global	_project_hidden
+_project_hidden:	.zero	1			; rectangles skipped as hidden (engine.h)
 .Lr_bx:		.zero	3			; bias_x, bias_z
 .Lr_bz:		.zero	3
 .Lr_xp:		.zero	3			; -> the {XC, XS} entry of the fixed line, then of cell lo
