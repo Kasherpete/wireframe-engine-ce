@@ -519,7 +519,6 @@ _projectRecords:
 	dec	a
 	jp	z, .Lfull		; ground panel: a full box at any distance
 	call	.Llod_side		; a rectangle: keep only the side it shows most
-	YLOGS
 	jp	.Lrect
 
 .Lfull:
@@ -626,41 +625,38 @@ _projectRecords:
 	ld	(_project_full), a
 	jr	.Lend
 
-	; ==== level of detail: the rectangle of the x and y extent, at the centre depth ====
+	; ==== level of detail: the rectangle of the x and y extent, at the centre depth. Each side
+	; projected straight into out[] (no logs kept: each is used once). Neighbouring boxes at
+	; the same depth project the same grid lines, so their rectangles meet exactly. A unit is at
+	; least 2.5 pixels within the far plane, so r > l and b > t ====
 .Lrect:
+	ld	hl, (VAR(V_Z00))
+	ld	de, (VAR(V_CAM_KZMID3))
+	add	hl, de
+	LOG_Z				; bc
 	ld	hl, (VAR(V_X00))
 	ld	de, (VAR(V_CAM_KXMIN3))
 	add	hl, de
 	LOG_ABS
-	ld	(VAR(V_LX0)), hl
-	ld	(VAR(V_SX0)), a
+	PROJECT	CENTRE_X
+	ld	(OUT(0)), hl		; l
 	ld	hl, (VAR(V_X00))
 	ld	de, (VAR(V_CAM_KXMAX3))
 	add	hl, de
 	LOG_ABS
-	ld	(VAR(V_LX1)), hl
-	ld	(VAR(V_SX1)), a
-	ld	hl, (VAR(V_Z00))
-	ld	de, (VAR(V_CAM_KZMID3))
+	PROJECT	CENTRE_X
+	ld	(OUT(1)), hl		; r
+	ld	hl, (VAR(V_YT))
+	LOG_ABS
+	PROJECT	CENTRE_Y
+	ld	(OUT(2)), hl		; t
+	ld	hl, (VAR(V_YT))
+	ld	de, 3 * SUB
 	add	hl, de
-	LOG_Z
-	FACE	0, 1, 2, 3		; l r t b
-	; at least a pixel each way (rounding never gives r < l or b < t)
-	ld	hl, (OUT(0))
-	ld	de, (OUT(1))
-	or	a, a
-	sbc	hl, de
-	jr	nz, 1f
-	inc	de
-	ld	(OUT(1)), de
-1:	ld	hl, (OUT(2))
-	ld	de, (OUT(3))
-	or	a, a
-	sbc	hl, de
-	jr	nz, 2f
-	inc	de
-	ld	(OUT(3)), de
-2:	ld	a, BOX_RECT
+	LOG_ABS
+	PROJECT	CENTRE_Y
+	ld	(OUT(3)), hl		; b
+	ld	a, BOX_RECT
 	jp	.Ldone
 
 	; ==== level of detail colour: of the visible x and z sides, keep only the one that points

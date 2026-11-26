@@ -844,16 +844,6 @@ _fillBoxes:
 	sbc	hl, de
 	call	c, .Lflush
 
-	; rows as 24-bit numbers, for the edge arithmetic
-	or	a, a
-	sbc	hl, hl
-	ld	l, (V(L_R0))
-	ld	(V(L_Y0)), hl
-	ld	bc, 0
-	ld	c, (V(L_NROW))
-	add	hl, bc
-	ld	(V(L_Y1)), hl
-
 	; ---- 3. xl and xr of every row ----
 	ld	b, (V(L_NROW))
 	ld	a, (V(L_RECT))
@@ -869,6 +859,16 @@ _fillBoxes:
 	jr	.Lrun
 
 .Lsides:
+	; rows as 24-bit numbers, for the edge arithmetic
+	or	a, a
+	sbc	hl, hl
+	ld	l, (V(L_R0))
+	ld	(V(L_Y0)), hl
+	ld	bc, 0
+	ld	c, (V(L_NROW))
+	add	hl, bc
+	ld	(V(L_Y1)), hl
+
 	; the right side, clockwise from t (entries t .. t + 3), and the left side backwards from
 	; the copy of t four entries on (t + 4 .. t + 1)
 	ld	hl, (V(L_Y0))
