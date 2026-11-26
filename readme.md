@@ -154,6 +154,8 @@ compiler path to `CEdev/bin/ez80-clang` and the include path to `CEdev/include` 
 - [x] Add settings menu with render distance and FPS toggle
 - [x] Remove draw time from HUD, add voxel count
 - [x] Add pause menu
+- [ ] Add license (why wasn't this done three years ago...)
+- [ ] Update title edition text
 
 ## Changelog
 

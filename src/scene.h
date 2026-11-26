@@ -7,7 +7,7 @@
 #include "chunks.h"
 
 #define PROJECT_BATCH 64             // boxes projected before they are filled (6 .. 255: a run fits)
-#define MAX_PROJECTED 400            // boxes projected per frame (the farthest are dropped)
+#define MAX_PROJECTED 200            // boxes projected per frame (the farthest are dropped)
 
 // the batch of projected boxes projectScene passes to fillBoxes, and how many boxes it projected
 // this frame in all

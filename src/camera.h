@@ -18,12 +18,14 @@ extern int24_t cam_sin, cam_cos;
 // Level of detail: world units from which a box becomes a rectangle (engine.h LOD_RECT_DIST). At
 // or beyond the far plane it is off.
 extern uint8_t lod_rect_dist;
-// The far plane in world units, 1 .. GRID_RANGE (default GRID_RANGE, the most the tables and the
-// chunk window allow). Lower is faster.
+// The render distance in world units, 1 .. GRID_RANGE (default GRID_RANGE, the most the tables and
+// the chunk window allow): a circle around the camera's cell (radTab, engine.h), and the far plane
+// (the circle lies inside it). Lower is faster.
 extern uint8_t render_dist;
-// Distance fog: boxes whose centre is at least fog_dist deep are drawn half dithered with the sky
-// colour, and so is the ground between fog_dist and the far plane; beyond the far plane the ground
-// is sky colour. At or beyond the far plane (render_dist): no fog
+// Distance fog: boxes whose cell is at least fog_dist from the camera's are drawn half dithered with
+// the sky colour (radTab, engine.h: a circle, the same at every yaw), and so is the ground between
+// fog_dist and the far plane (by depth: bands of rows); beyond the far plane the ground is sky
+// colour. At or beyond render_dist: no fog
 extern uint8_t fog_dist;
 
 // the face tables project.S reads: once at startup

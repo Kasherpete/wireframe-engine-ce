@@ -90,6 +90,65 @@ static uint8_t groundRows(int24_t h, int24_t d) {
     return (uint8_t)(v > VIEW_H - CENTRE_Y ? VIEW_H - CENTRE_Y : v);
 }
 
+// radTab (engine.h) for render distance rd (1 .. GRID_RANGE), fog fd and level of detail lr (at
+// least 1). Only when one of them changes, so plainly; squares by addition
+static uint8_t rad_rd, rad_fd, rad_lr;      // what radTab holds (rd 0: nothing yet)
+
+static void radBuild(uint8_t rd, uint8_t fd, uint8_t lr) {
+    uint24_t sq[66];                        // sq[k] = k^2
+    sq[0] = 0;
+    for (uint8_t k = 1; k < 66; k++) {
+        sq[k] = sq[k - 1] + k + k - 1;
+    }
+    // (4 rd - 1)^2 and (4 lr - 1)^2, as sums of odd numbers
+    uint24_t far2 = 0, lod2 = 0;
+    for (uint24_t k = 0, odd = 1; k < (uint24_t)(4 * rd - 1); k++, odd += 2) {
+        far2 += odd;
+    }
+    for (uint24_t k = 0, odd = 1; k < (uint24_t)(4 * lr - 1); k++, odd += 2) {
+        lod2 += odd;
+    }
+    const uint24_t fog2 = fd < 64 ? sq[fd] : 0;
+    for (uint8_t i = 0; i < 64; i++) {
+        const uint8_t dx = i < GRID_RANGE ? GRID_RANGE - i : i - GRID_RANGE;
+        // cull: 16 ((|dx| + 1)^2 + (|dz| + 1)^2) < (4 rd - 1)^2
+        uint8_t n = 0;
+        while (n < 64 && ((sq[dx + 1] + sq[n + 1]) << 4) < far2) {
+            n++;
+        }
+        radTab[RAD_CULL + i] = n;
+        // fog: the least |dz| with dx^2 + dz^2 >= fd^2 (none beyond the window: 255)
+        n = 0;
+        if (fd >= 64) {
+            n = 255;
+        } else {
+            while (sq[dx] + sq[n] < fog2) {
+                n++;
+            }
+        }
+        radTab[RAD_FOG + i] = n;
+    }
+    // runs, by |d| (MAX_DXZ < 32): the cells (d, e) with 16 (max(|d|, 1)^2 + max(|e|, 1)^2) <
+    // (4 lr - 1)^2 (a corner nearer than lr: not a rectangle), inside the cull circle and nearer than
+    // the fog. At most GRID_RANGE, so the run's cells stay inside the tables (project.S)
+    for (uint8_t d = 0; d < 32; d++) {
+        const uint8_t a = d ? d : 1;
+        uint8_t n = 0;
+        while (n < GRID_RANGE) {
+            const uint8_t b = n ? n : 1;
+            if (((sq[a] + sq[b]) << 4) >= lod2 || ((sq[d + 1] + sq[n + 1]) << 4) >= far2 ||
+                (fd < 64 && sq[d] + sq[n] >= fog2)) {
+                break;
+            }
+            n++;
+        }
+        radTab[RAD_RUN + d] = n;
+    }
+    rad_rd = rd;
+    rad_fd = fd;
+    rad_lr = lr;
+}
+
 // Per frame, in C, but with no library calls but fillRotTable's (and the fog's divisions): multiplies by constants are adds
 // and shifts, the cells and fractions of the position are bytes of it (CELL_OF, player.h), and the
 // box centre offset halves instead of dividing by 6
@@ -166,9 +225,11 @@ void setupCamera(void) {
     const int24_t far3 = (rd << 8) + (rd << 7);
     cam_far = rd << 7;
 
-    // fog: by the depth of the centre, z00 + kzmid3
+    // the circles of the render distance, fog and runs (engine.h): only when one changed
     const int24_t fd = fog_dist;
-    cam_fog = (fd << 8) + (fd << 7) - cam_kzmid3;
+    if ((uint8_t)rd != rad_rd || (uint8_t)fd != rad_fd || (uint8_t)lr != rad_lr) {
+        radBuild((uint8_t)rd, (uint8_t)fd, (uint8_t)lr);
+    }
     // the background rows (fill.h): sky, then the ground beyond the far plane in sky colour, the
     // ground beyond fog_dist dithered, the rest plain. -player_y is the eye height (the ground is
     // y = 0, and the collision keeps the eye above it and within 2^23 / 65536 units)

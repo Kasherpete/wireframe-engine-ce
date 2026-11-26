@@ -177,7 +177,7 @@ int main(void) {
 
         // idle time, so it is left out of the frame time
         uint24_t wait_cycles = CYCLES();
-        waitForBufferScan();
+        // waitForBufferScan();
         wait_cycles = CYCLES() - wait_cycles;
         if (menu) {
             titlePoll();

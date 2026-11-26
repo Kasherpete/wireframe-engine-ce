@@ -97,11 +97,29 @@
 #define RUN_DIST        8
 
 // ---- distance fog (the default of fog_dist, camera.c) ----
-// Boxes whose centre is at least FOG_DIST deep use the fogged half of materials[] (material + 16:
-// every colour byte half sky colour), the ground fades the same way, and beyond the far plane
-// everything is sky colour, so boxes crossing it fade out instead of popping
+// Boxes whose centre is at least FOG_DIST away (radTab) use the fogged half of materials[] (material
+// + 16: every colour byte half sky colour), the ground fades the same way (by depth: it is drawn
+// in bands of rows), and beyond the far plane everything is sky colour, so boxes crossing it fade
+// out instead of popping
 #define FOG_DIST        16
 #define MAT_FOGGED      16    // added to a material index by project.S
+
+// ---- the circles (radTab, built by setupCamera when a distance changes) ----
+// The render distance, the fog and the runs end at a distance from the camera, not at a depth, so
+// turning on the spot changes none of them. By cells: (dx, dz) the box's cell minus the camera's,
+// so the circles move with the camera cell and are exact for every yaw. One 256-aligned page:
+//   radTab[RAD_CULL + n], n = GRID_RANGE + dx (a grid index): kept when |dz| < it, that is
+//       16 ((|dx| + 1)^2 + (|dz| + 1)^2) < (4 render_dist - 1)^2 (the farthest point of the box
+//       within the render distance, a quarter unit spare: then its farthest corner is surely
+//       before the far plane at any yaw, which the depth test still checks)
+//   radTab[RAD_FOG + n]: fogged when |dz| >= it, that is dx^2 + dz^2 >= fog_dist^2 (the cell
+//       centre at least fog_dist away)
+//   radTab[RAD_RUN + |dx|]: a voxel's faces in runs are drawn by the runs when |dz| < it: inside
+//       the circle of runs, which lies inside the other two (never culled, never fogged) and has a
+//       corner nearer than lod_rect_dist (never a rectangle). At most GRID_RANGE (project.S)
+#define RAD_CULL        0
+#define RAD_FOG         64
+#define RAD_RUN         128
 
 #ifndef __ASSEMBLER__
 #include <stdint.h>
@@ -124,9 +142,10 @@ extern int24_t cam_cos3, cam_sin3;
 extern int24_t cam_kxmin3, cam_kxmax3, cam_kzmin3, cam_kzmax3;
 // the middle of those offsets (x3): a box centre is (x00 + kxmid3, z00 + kzmid3)
 extern int24_t cam_kxmid3, cam_kzmid3;
-// level of detail (x3): BOX_RECT when z00 >= cam_lod_rect. Fog (x3): material + MAT_FOGGED when
-// z00 >= cam_fog
-extern int24_t cam_lod_rect, cam_fog;
+// level of detail (x3): BOX_RECT when z00 >= cam_lod_rect
+extern int24_t cam_lod_rect;
+// the render distance, fog and run circles (above; defined in project.S)
+extern uint8_t radTab[256];
 // the far plane in 1/SUB units (render_dist): cullChunks
 extern int24_t cam_far;
 // culling, all x3. With x00/z00 the camera space of corner (X-1, Z-1), a box is kept when

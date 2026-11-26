@@ -101,6 +101,20 @@ static void cullChunks(void) {
 }
 
 
+// |d| of the cell of a chunk nearest the camera's along one axis, from d, its first cell minus the
+// camera's (at most MAX_DXZ: the window)
+static uint8_t nearestCell(int24_t d) {
+    if (d > 0) {
+        return (uint8_t)d;
+    }
+    d += CHUNK_SIZE - 1;
+    if (d < 0) {
+        return (uint8_t)(0 - d);
+    }
+    return 0;
+}
+_Static_assert(GRID_RANGE + MAX_DXZ < RAD_FOG, "radTab[RAD_CULL + GRID_RANGE + dx] stays in the cull table");
+
 // the faces a chunk's runs draw, by chunk_t.mode (WORLD_RUNS_*)
 static const uint8_t run_faces[3] = {0, FACE_XP | FACE_XN, FACE_ZP | FACE_ZN};
 
@@ -138,6 +152,16 @@ void projectScene(uint24_t base) {
         if (used >= MAX_PROJECTED) {
             k--;                        // the cap, reached by skipped rectangles: this chunk is
             break;                      // not done (chunks_done)
+        }
+        {
+            // beyond the render distance: its nearest cell is outside the circle (radTab, engine.h,
+            // by cells from the camera's), so are all its boxes, at any yaw
+            const uint8_t dx = nearestCell(ch->ox - 1 - cam_cell_x);
+            const uint8_t dz = nearestCell(ch->oz - 1 - cam_cell_z);
+            if (dz >= radTab[RAD_CULL + GRID_RANGE + dx]) {
+                chunk_visible[w] = 0;
+                continue;
+            }
         }
         if (occlusion_enabled) {
             // its records' cells ymin - 1 .. ymax - 1 span y from ymin - 2 to ymax - 1 (y down),

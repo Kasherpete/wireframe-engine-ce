@@ -18,17 +18,19 @@
 ; rectangle of its x and y extent projected at its centre depth (4 projections instead of 12). It
 ; keeps only the visible side (x or z) that points at the camera position most (.Llod_side).
 ;
-; Fog: a box whose centre is at least cam_fog deep gets material + MAT_FOGGED (the fogged colours,
-; colours.c). With fog_dist at or beyond the far plane no box reaches cam_fog.
+; Render distance and fog are circles around the camera's cell (radTab, engine.h), not depths, so
+; turning changes neither: a box outside the render distance circle is skipped, one outside the fog
+; circle gets material + MAT_FOGGED (the fogged colours, colours.c). One lookup each, after the face
+; test. The depth test below still bounds the tables (every box inside the circle passes it).
 ;
 ; Runs (chunks.h): with runs (the faces this chunk's runs draw, or 0) a voxel with FACE_RUN leaves
 ; those faces out, and a run record (.Lrun) becomes BOX_RUN: the points between its faces. Only its
 ; cells that pass the culling of a box are kept (they are contiguous: every test is linear along the
 ; run), so every point is a corner of a kept box, as the table proof (gen_tables.py) requires. A
-; point behind the near plane is moved along the run to it (exact). Runs stop at the level of detail:
-; beyond it a voxel is one rectangle anyway, with all its faces, which is cheaper than a run's points
-; and edges. Fog is decided per cell as for a box, so a run crossing fog_dist (with the level of
-; detail at or beyond it) is split there into two.
+; point behind the near plane is moved along the run to it (exact). Runs stop at the circle of runs
+; (radTab): inside it no cell is a rectangle (beyond the level of detail a voxel is one rectangle
+; anyway, with all its faces, cheaper than a run's points and edges), fogged or culled by the render
+; distance, and a FACE_RUN voxel leaves its run faces to the runs exactly inside it.
 ;
 ; Why assembly: clang turns every multiply, right shift and even AND into a library call. And the
 ; CE is memory bound: roughly 2 cycles per byte touched, opcode bytes included. So this code
@@ -111,7 +113,7 @@
 #define V_CAM_KXMID3	74
 #define V_CAM_KZMID3	77
 #define V_CAM_LODRECT	80
-#define V_CAM_FOG	83
+#define V_FOGM	83
 #define V_ROOM		86
 #define V_EXPO		87
 #define V_SIZE		88
@@ -290,21 +292,15 @@ _projectRecords:
 	ld	(.Lrun_m + 1), a
 	or	a, a
 	jr	z, .Lruns_off
-	ld	a, 0xfa			; the checks as assembled: jp m, .Lrun
+	ld	a, 0xfa			; the check as assembled: jp m, .Lrun
 	ld	(.Lra), a
 	ld	hl, .Lrun
 	ld	(.Lra + 1), hl
-	ld	a, 0xdd			; bit 6, (ix + V_EXPO)
-	ld	(.Lmb), a
-	ld	a, 0xcb
-	ld	(.Lmb + 1), a
-	ld	a, V_EXPO
-	ld	(.Lmb + 2), a
 	ld	a, V_EXPO		; and a, (ix + V_EXPO)
 	ld	(.Lft + 2), a
 	ld	a, 0xdd
 	jr	.Lruns_on
-.Lruns_off:				; jr over them, and the face test on the record
+.Lruns_off:				; jr over it, and the face test on the record
 	ld	hl, .Lra_end
 	ld	de, .Lra + 2
 	or	a, a
@@ -312,13 +308,6 @@ _projectRecords:
 	ld	h, l
 	ld	l, 0x18
 	ld	(.Lra), hl		; (the byte after it is never executed)
-	ld	hl, .Lmb_end
-	ld	de, .Lmb + 2
-	or	a, a
-	sbc	hl, de
-	ld	h, l
-	ld	l, 0x18
-	ld	(.Lmb), hl
 	ld	a, 4			; and a, (iy + 4)
 	ld	(.Lft + 2), a
 	ld	a, 0xfd
@@ -327,17 +316,11 @@ _projectRecords:
 	ld	a, (iy + 24)
 	cpl
 	and	a, FACE_XP | FACE_XN | FACE_ZP | FACE_ZN | FACE_TOP | FACE_BOT
-	ld	(.Lmm + 1), a
 	ld	(.Lmm0 + 1), a
 	ld	a, (iy + 18)
 	ld	(.Lmbx + 1), a
 	ld	a, (iy + 21)
 	ld	(.Lmbz + 1), a
-	ld	a, (_lod_rect_dist)
-	sub	a, 2
-	jr	nc, 2f
-	xor	a, a
-2:	ld	(.Lmlod + 1), a
 	ld	hl, (iy + 18)
 	ld	(.Lr_bx), hl
 	ld	(.Lrgbx + 1), hl
@@ -356,22 +339,26 @@ _projectRecords:
 	; patched to a jr there
 .Lra:	jp	m, .Lrun		; FACE_RUN_REC: a run
 	ld	(VAR(V_EXPO)), a
-	; FACE_RUN, and surely nearer than the level of detail: its nearest corner is at most
-	; |dx| + |dz| + 2 units away (cells from the camera's, gridDist), and a depth is at most a
-	; distance. Then the runs draw those faces (else decided by its depth, below)
+	; FACE_RUN, and inside the circle of runs (engine.h, radTab: by its cells from the camera's,
+	; gridDist): the runs draw those faces, as they draw exactly the run cells inside it. Outside
+	; it the voxel draws them (as a box or a rectangle)
 	bit	6, a
 	jr	z, .Lra_end
 	ld	hl, _gridDist
 	ld	a, (iy + 0)
 .Lmbx:	add	a, 0			; + bias_x (patched)
 	ld	l, a
-	ld	c, (hl)
+	ld	c, (hl)			; |dx| (at most MAX_DXZ: or is an add)
 	ld	a, (iy + 2)
 .Lmbz:	add	a, 0			; + bias_z (patched)
 	ld	l, a
-	ld	a, (hl)
-	add	a, c
-.Lmlod:	cp	a, 0			; patched: lod_rect_dist - 2 (or 0)
+	ld	b, (hl)			; |dz|
+	ld	hl, _radTab		; 256-aligned
+	ld	a, c
+	or	a, RAD_RUN
+	ld	l, a
+	ld	a, b
+	cp	a, (hl)
 	jr	nc, .Lra_end
 	ld	a, (VAR(V_EXPO))
 .Lmm0:	and	a, 0			; patched: ~runs (clears FACE_RUN too)
@@ -407,21 +394,6 @@ _projectRecords:
 	or	a, a
 	sbc	hl, de			; unsigned: carry if every corner is in depth range
 	jp	nc, .Lskip
-	; FACE_RUN and nearer than the level of detail: runs draw those faces (beyond it the box
-	; becomes a rectangle with all of them, and runs stop there). With the runs off .Lmb is
-	; patched to a jr to .Lmb_end
-.Lmb:	bit	6, (VAR(V_EXPO))
-	jr	z, .Lmb_end
-	ld	hl, (VAR(V_Z00))
-	ld	de, (VAR(V_CAM_LODRECT))
-	or	a, a
-	sbc	hl, de
-	jp	p, .Lmb_end		; a rectangle: all its faces
-	ld	a, (VAR(V_EXPO))
-.Lmm:	and	a, 0			; patched: ~runs (all faces when the runs are off)
-	jp	z, .Lskip
-	ld	(VAR(V_EXPO)), a
-.Lmb_end:
 	ld	hl, (iy + 0)		; XC
 	or	a, a
 	sbc	hl, bc
@@ -485,6 +457,7 @@ _projectRecords:
 	ld	a, (iy + 0)
 .Lfbx:	add	a, 0			; + bias_x (patched)
 	ld	l, a
+	ld	e, a			; (the x grid index, for the circles)
 	ld	c, (hl)
 	inc	h			; face_y (the tables are 1024-aligned: no wrap)
 	ld	a, (iy + 1)
@@ -497,11 +470,28 @@ _projectRecords:
 	ld	a, (iy + 2)
 .Lfbz:	add	a, 0
 	ld	l, a
+	ld	d, a			; (the z grid index)
 	ld	a, (hl)
 	or	a, c
 .Lft:	and	a, (VAR(V_EXPO))	; exposed, less runs (bits 6, 7 never face). Runs off: (iy + 4)
 	jp	z, .Lnext
 	ld	(VAR(V_FACES)), a
+
+	; ---- the render distance and fog circles (engine.h, radTab), by the cells from the
+	; camera's: the same at every yaw. The grid indices passed GRID_INDEX: below 2 GRID_RANGE ----
+	ld	hl, _gridDist
+	ld	l, d
+	ld	a, (hl)			; |dz|
+	ld	hl, _radTab		; 256-aligned: + RAD_CULL
+	ld	l, e
+	cp	a, (hl)
+	jp	nc, .Lnext		; beyond the render distance
+	set	6, l			; + RAD_FOG
+	cp	a, (hl)			; carry: nearer than the fog
+	sbc	a, a
+	cpl
+	and	a, MAT_FOGGED
+	ld	(VAR(V_FOGM)), a
 
 	; the box is kept: iy = its slot in out[]
 	ld	iy, (VAR(V_OUT))
@@ -649,18 +639,13 @@ _projectRecords:
 	ld	(iy + PB_KIND), a
 	ld	a, (VAR(V_FACES))
 	ld	(iy + PB_FACES), a
-	ld	hl, (VAR(V_Z00))	; fog: z00 >= cam_fog
-	ld	de, (VAR(V_CAM_FOG))
-	or	a, a
-	sbc	hl, de
-	ld	hl, (VAR(V_REC))	; (ld and inc hl keep the flags)
+	ld	hl, (VAR(V_REC))
 	inc	hl
 	inc	hl
 	inc	hl
 	ld	a, (hl)
-	jp	m, 1f
-	add	a, MAT_FOGGED
-1:	ld	(iy + PB_MAT), a
+	add	a, (VAR(V_FOGM))	; fogged: + MAT_FOGGED
+	ld	(iy + PB_MAT), a
 	lea	iy, iy + PB_SIZE
 	ld	(VAR(V_OUT)), iy
 	inc	(VAR(V_KEPT))
@@ -947,6 +932,8 @@ _projectRecords:
 	ld	(.Lr_n), hl		; grid index of cell 0 along the run (maybe outside the tables)
 	ld	hl, _rotZ_
 	ld	(.Lr_zp), hl		; stepping: rotZ_ + 6 n
+	ld	a, (.Lr_bx)
+	add	a, (iy + 0)		; the grid index of the fixed line
 	jp	.Lrun_cells
 .Lrun_zf:
 	; z faces of the cells (X + i, Y, Z): (ax, az) = (cos, sin), the face line Z - 1 or Z
@@ -978,20 +965,43 @@ _projectRecords:
 	ld	(.Lr_n), hl
 	ld	hl, _rotX_
 	ld	(.Lr_zp), hl
+	ld	a, (.Lr_bz)
+	add	a, (iy + 2)		; the grid index of the fixed line
 
-	; ---- the cells lo .. hi to draw: inside the tables, then (the tests are linear along the run,
-	; so each keeps an interval of cells) passing the culling of a box and nearer than the level of
-	; detail. The camera space of cell lo comes from the tables, the rest by adding (ax, az) ----
+	; ---- the cells lo .. hi to draw: inside the circle of runs (engine.h, radTab: by |d| of the
+	; fixed line, the cells within m of the camera's along the run, m < GRID_RANGE, so inside
+	; the tables too), then (the tests are linear along the run, so each keeps an interval of
+	; cells) passing the culling of a box and nearer than the level of detail. Inside the circle
+	; no cell is fogged. The camera space of cell lo comes from the tables, the rest by adding
+	; (ax, az). In: a = the grid index of the fixed line ----
 .Lrun_cells:
+	ld	hl, _gridDist
+	ld	l, a
+	ld	a, (hl)			; |d| (at most MAX_DXZ: or is an add)
+	ld	hl, _radTab		; 256-aligned
+	or	a, RAD_RUN
+	ld	l, a
+	ld	a, (hl)
+	sub	a, 1			; m
+	jp	c, .Lnext		; no cell of this line is inside
+	ld	bc, 0
+	ld	c, a
+	ld	hl, GRID_RANGE
+	or	a, a
+	sbc	hl, bc
+	ld	(.Lr_cl), hl		; GRID_RANGE - m: the first grid index inside
+	add	hl, bc
+	add	hl, bc
+	ld	(.Lr_ch), hl		; GRID_RANGE + m: the last
 	xor	a, a
 	ld	(.Lr_lo), a
 	ld	a, (.Lr_len)
 	dec	a
 	ld	(.Lr_hi), a
 	ld	de, (.Lr_n)
-	ld	hl, 2 * GRID_RANGE - 1
+	ld	hl, (.Lr_ch)
 	or	a, a
-	sbc	hl, de			; the last cell in the tables, from cell 0
+	sbc	hl, de			; the last cell inside, from cell 0
 	jp	m, .Lnext
 	ld	bc, 0
 	ld	c, a
@@ -1002,20 +1012,21 @@ _projectRecords:
 	ld	a, l
 	ld	(.Lr_hi), a
 1:	ld	hl, (.Lr_n)
-	ld	bc, 0
+	ld	bc, (.Lr_cl)
 	or	a, a
-	sbc	hl, bc
+	sbc	hl, bc			; n - the first inside
 	jp	p, 2f
-	ex	de, hl			; cell 0 is before the tables: lo = -n
+	ex	de, hl			; cell 0 is before it: lo = first - n
 	or	a, a
 	sbc	hl, hl
 	sbc	hl, de
+	ld	bc, 0
 	ld	a, (.Lr_hi)
 	ld	c, a
 	or	a, a
 	sbc	hl, bc
 	jr	z, 21f
-	jp	nc, .Lnext		; -n > hi: none in the tables
+	jp	nc, .Lnext		; lo > hi: none inside
 21:	add	hl, bc
 	ld	a, l
 	ld	(.Lr_lo), a
@@ -1111,8 +1122,7 @@ _projectRecords:
 	ex	de, hl
 	pop	bc
 	djnz	1b
-2:	ld	(.Lr_ze), de
-	ld	iy, .Lr_ve
+2:	ld	iy, .Lr_ve
 	call	.Lr_vals
 	ld	hl, (VAR(V_X00))
 	ld	de, (VAR(V_Z00))
@@ -1160,49 +1170,6 @@ _projectRecords:
 	ld	(VAR(V_X00)), hl
 	ld	(VAR(V_Z00)), de
 8:
-	; fog of cell lo (z00 >= cam_fog, as for a box). Cells b and bh alike (the usual case: fog
-	; is beyond the level of detail): all of them. Else k, the first cell of the other fog
-	; (0xff: none), stepping from lo
-	ld	a, 0xff
-	ld	(.Lr_k), a
-	ld	de, (VAR(V_CAM_FOG))
-	ld	hl, (VAR(V_Z00))
-	or	a, a
-	sbc	hl, de			; f(lo)
-	ld	b, 0
-	jp	m, 4f
-	inc	b
-4:	ld	a, b
-	ld	(.Lr_fog), a
-	push	hl
-	ld	hl, (.Lr_ze)
-	or	a, a
-	sbc	hl, de			; f(bh)
-	ld	a, 0
-	jp	m, 41f
-	inc	a
-41:	pop	hl
-	cp	a, b
-	jr	z, 7f			; the same: so are lo .. hi
-	ld	de, (.Lr_az)
-	ld	a, (.Lr_lo)
-	ld	c, a
-5:	ld	a, (.Lr_hi)
-	cp	a, c
-	jr	z, 7f
-	inc	c
-	or	a, a
-	adc	hl, de			; the fog test of cell c
-	ld	a, 0
-	jp	m, 6f
-	inc	a
-6:	ld	b, a
-	ld	a, (.Lr_fog)
-	cp	a, b
-	jr	z, 5b
-	ld	a, c
-	ld	(.Lr_k), a
-7:
 	YLOGS
 
 	; ---- the points lo .. hi + 1 on the face line into .Lpts as {x, z}: the face corner of
@@ -1237,36 +1204,12 @@ _projectRecords:
 	pop	hl
 	djnz	.Lrp
 
-	; ---- one piece, or two split at cell k by fog ----
+	; ---- one piece ----
 	xor	a, a
 	ld	(.Lr_s), a
-	ld	a, (.Lr_fog)
-	ld	(.Lr_pf), a
-	ld	a, (.Lr_k)
-	inc	a
-	jr	nz, .Lrun_split
 	ld	a, (.Lr_np)
 	dec	a
 	ld	(.Lr_e), a
-	call	.Lrun_piece
-	jp	c, .Lout_full
-	jp	.Lnext
-.Lrun_split:
-	dec	a
-	ld	hl, .Lr_lo
-	sub	a, (hl)
-	ld	(.Lr_e), a		; points 0 .. k - i0
-	ld	(.Lr_ks), a
-	call	.Lrun_piece
-	jp	c, .Lout_full
-	ld	a, (.Lr_ks)
-	ld	(.Lr_s), a		; then k - i0 .. np - 1, the other fog
-	ld	a, (.Lr_np)
-	dec	a
-	ld	(.Lr_e), a
-	ld	a, (.Lr_pf)
-	xor	a, 1
-	ld	(.Lr_pf), a
 	call	.Lrun_piece
 	jp	c, .Lout_full
 	jp	.Lnext
@@ -1426,7 +1369,7 @@ _projectRecords:
 	; lo > hi: carry is set
 4:	scf
 5:	ret
-; One piece: points .Lr_s .. .Lr_e of .Lpts (at least 2), fog .Lr_pf, into the next slot(s) of
+; One piece: points .Lr_s .. .Lr_e of .Lpts (at least 2), into the next slot(s) of
 ; out[] as BOX_RUN. Points behind the near plane are dropped, the last of them moved along the run
 ; to it (.Lclip_x; in place, so a point the pieces share stays on the run). Carry: out[] is full
 ; (project_full is then set by the caller)
@@ -1538,12 +1481,8 @@ _projectRecords:
 	or	a, (VAR(V_FACES))
 	ld	(iy + PB_FACES), a
 	ld	(iy + PB_KIND), BOX_RUN
-	ld	a, (.Lr_pf)
-	or	a, a
-	ld	a, (.Lr_mat)
-	jr	z, 2f
-	add	a, MAT_FOGGED
-2:	ld	(iy + PB_MAT), a
+	ld	a, (.Lr_mat)		; never fogged (inside the circle of runs)
+	ld	(iy + PB_MAT), a
 	push	bc			; c = slots
 	ld	a, (.Lr_s)
 	ld	h, a
@@ -1740,11 +1679,11 @@ _cam_cardinal:	.zero	1
 .Lleft:		.zero	1			; records left
 .Lkept:		.zero	1
 .Lfaces:	.zero	1			; FACE_* of the current box
-	.global	_cam_kxmid3, _cam_kzmid3, _cam_lod_rect, _cam_fog
+	.global	_cam_kxmid3, _cam_kzmid3, _cam_lod_rect
 _cam_kxmid3:	.zero	3
 _cam_kzmid3:	.zero	3
 _cam_lod_rect:	.zero	3
-_cam_fog:	.zero	3
+.Lfogm:		.zero	3			; 0, or MAT_FOGGED: the box is fogged (one byte used)
 .Lroom:		.zero	1			; slots out[] still has room for
 .Lexpo:		.zero	1			; exposed faces of the record, less those in runs
 .Lvars_end:
@@ -1835,8 +1774,8 @@ _cam_fog:	.zero	3
 	.if	_cam_kxmid3 - .Lvars != V_CAM_KXMID3 || _cam_kzmid3 - .Lvars != V_CAM_KZMID3
 	.error	"V_CAM_KXMID3 or V_CAM_KZMID3 does not match .Lvars"
 	.endif
-	.if	_cam_lod_rect - .Lvars != V_CAM_LODRECT || _cam_fog - .Lvars != V_CAM_FOG
-	.error	"V_CAM_LODRECT or V_CAM_FOG does not match .Lvars"
+	.if	_cam_lod_rect - .Lvars != V_CAM_LODRECT || .Lfogm - .Lvars != V_FOGM
+	.error	"V_CAM_LODRECT or V_FOGM does not match .Lvars"
 	.endif
 	.if	.Lroom - .Lvars != V_ROOM || .Lexpo - .Lvars != V_EXPO
 	.error	"V_ROOM or V_EXPO does not match .Lvars"
@@ -1875,18 +1814,15 @@ _project_hidden:	.zero	1			; rectangles skipped as hidden (engine.h)
 .Lr_hi:		.zero	1
 .Lr_b:		.zero	1			; the first and last cell in the tables
 .Lr_bh:		.zero	1
-.Lr_k:		.zero	1			; the first of them of the other fog (0xff: none)
-.Lr_fog:	.zero	1			; the fog of cell lo
 .Lr_np:		.zero	1			; points in .Lpts
-.Lr_s:		.zero	1			; the piece: first and last point, fog, points
+.Lr_s:		.zero	1			; the piece: first and last point, points
 .Lr_e:		.zero	1
-.Lr_pf:		.zero	1
 .Lr_c:		.zero	1
-.Lr_ks:		.zero	1			; the point the pieces share
 .Lpts:		.zero	6 * RUN_POINTS		; {x, z} of the points of the kept cells
 .Lr_m:		.zero	3			; the constants of tests 0 and 1
 .Lr_c3:		.zero	3
-.Lr_ze:		.zero	3			; z00 of cell bh
+.Lr_cl:		.zero	3			; the first and last grid index inside the circle of runs
+.Lr_ch:		.zero	3
 .Lr_vb:		.zero	12			; the test values of cells b and bh
 .Lr_ve:		.zero	12
 
@@ -1897,6 +1833,8 @@ _project_hidden:	.zero	1			; rectangles skipped as hidden (engine.h)
 _face_x:	.zero	256
 _face_y:	.zero	256
 _face_z:	.zero	256
+	.global	_radTab
+_radTab:	.zero	256		; the circles (engine.h), 256-aligned after face_z
 
 	.extern	_cam_bias_y
 	.extern	_lod_rect_dist
