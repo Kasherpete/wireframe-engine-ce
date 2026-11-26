@@ -26,9 +26,9 @@ static int24_t fall_vel   = 0;   // 1/256 units per second, downwards
 static uint8_t on_ground  = 0;
 static int24_t eye_height = STAND_HEIGHT;  // 1/65536 units: eases between STAND_ and CROUCH_HEIGHT
 
-#define WALK_SPEED   (4 * 256)        // units/s, in 1/256 units (forwards/backwards and strafing)
+#define WALK_SPEED   (9 * 128)        // units/s (4.5; at most ~5.6, see the assert below), in 1/256 units (forwards/backwards and strafing)
 #define WALK_ACCEL   (32 * 256)       // units/s^2: full speed (and a full stop) in 1/8 s
-#define TURN_SPEED   (96 * 256)       // steps/s (96 = 135 deg/s), in 1/256 steps
+#define TURN_SPEED   (112 * 256)      // steps/s (112 = 158 deg/s), in 1/256 steps
 #define TURN_ACCEL   (768L * 256)     // steps/s^2: full speed in 1/8 s
 #define SNAP_RANGE   (8L << 16)       // after a turn, ease into the nearest N/E/S/W if within 8 steps (11 deg). 0 disables
 #define SNAP_START   (16 * 256)       // ... once the turn has slowed below 16 steps/s
@@ -51,7 +51,7 @@ _Static_assert(WALK_ACCEL == 1L << 13, "walk_step = dt / 4");
 _Static_assert(CROUCH_SPEED == 12L << 7, "crouch step = 12 dt");
 _Static_assert(GRAVITY == 3L << 11, "gravity step = 3 dt / 16");
 _Static_assert(TURN_ACCEL == 6L << 15, "turn step = 6 dt");
-_Static_assert(WALK_SPEED <= 1 << 10 && MAX_DT <= 1 << 12 && SUB == 128, "walking maths fits 24 bits");
+_Static_assert((int32_t)WALK_SPEED * MAX_DT / 128 * 181 < 1L << 23 && SUB == 128, "walking maths fits 24 bits");
 _Static_assert((int32_t)MAX_DT * TURN_SPEED < 0x7fffffff / 2, "per-frame turn step overflows");
 _Static_assert(STEP_MAX < ONE, "a collision step enters at most one new cell per axis");
 _Static_assert(BODY_RADIUS < ONE / 2 && STAND_HEIGHT + HEAD_ROOM < 2 * ONE, "collideBody: at most 2 x 3 x 2 cells");
@@ -210,7 +210,7 @@ static void updateMotion(uint8_t keys, uint24_t dt) {
     uint8_t moved = 0;
     if (walk_vel != 0 || strafe_vel != 0) {
         // 1/65536 units: vel/256 * dt/32768 * 65536. Strafing is 90 degrees right of the view
-        // in 24 bits: |vel| dt <= 2^10 2^12, and |walk s| + |strafe c| <= 2^15 181 (|s| + |c| <= 181)
+        // in 24 bits: |walk s| + |strafe c| <= WALK_SPEED MAX_DT / 128 * 181 (|s| + |c| <= 181), asserted
         const uint8_t angle = ((const uint8_t *)&player_yaw)[2];
         const int24_t walk = (walk_vel * (int24_t)dt) >> 7;
         const int24_t strafe = (strafe_vel * (int24_t)dt) >> 7;

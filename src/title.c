@@ -23,7 +23,7 @@
 #define BUTTON_Y0  50
 #define BUTTON_DY  20
 
-#define TITLE_COLOUR     0xdd   // greish blue
+#define TITLE_COLOUR     0xd5   // greish blue
 #define TEXT_COLOUR      0x77   // white
 #define SHADOW_COLOUR    0x00   // black
 #define BUTTON_COLOUR    0x55   // grey
@@ -42,14 +42,14 @@
 #define CORNER_X     2
 
 // PICO-8 text: lowercase shows as its capitals (pico8_font.h)
-#define EDITION_TEXT  "ti84+ ce edition"
-#define VERSION_TEXT  "v1.2.1"
+#define EDITION_TEXT  "ti84+ edition"
+#define VERSION_TEXT  "v1.3.0"
 #define SITE_TEXT     "kasher.dev"
 
 // The splash: PICO-8 text rising 3 px per 8 to the right (about 20 degrees), centred here
-#define SPLASH_CX         138
-#define SPLASH_CY         26
-#define SPLASH_MAX_CHARS  10               // longer ones are cut (wider would leave the screen)
+#define SPLASH_CX         135
+#define SPLASH_CY         27
+#define SPLASH_MAX_CHARS  12               // longer ones are cut (wider would leave the screen)
 // the text 1 px in from every side of a sheared background band (the last glyph is 3 px, then its
 // shadow column, then 1 px of band); the band is PICO8_HEIGHT + 3 rows: 1 px, text, shadow, 1 px
 #define SPLASH_W          (SPLASH_MAX_CHARS * PICO8_ADVANCE + 2)
@@ -58,7 +58,7 @@
 #define SPLASH_H          (SPLASH_BAND + SPLASH_RISE(SPLASH_W - 1))
 #define SPLASHES          9
 static const char *const splashes[SPLASHES] = {
-    "try basic!", "Opensource", "Made in C!", "Kasher.dev!", "now in 3d!", "no ads!", "Stay safe!", "Creeper?", "HelloWorld"
+    "try basic!", "Open source!", "Made in C!", "Kasher.dev!", "now in 3d!", "no ads!", "Stay safe!", "Creeper?", "Hello World!"
 };
 gfx_UninitedSprite(splash, SPLASH_W, SPLASH_H);
 static uint8_t splash_ready = 0;

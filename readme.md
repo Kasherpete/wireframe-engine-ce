@@ -5,11 +5,10 @@ removal, a chunked world streamed from an AppVar, and a first-person player that
 collides with the world. It runs on a 48 MHz eZ80 with no FPU and no hardware divide, so the hot
 paths are hand-written eZ80 assembly and everything else is table lookups and additions.
 
-For now it is an engine; once it is in a ready state it will be used to make a couple of games.
 
-![Walking through the test world](docs/demo_world.png)
+![Walking through the test world](docs/screen43254.png)
 
-![The random boxes world](docs/demo_boxes.png)
+![The random boxes world](docs/screen3258943285.png)
 
 ## Features
 
@@ -154,10 +153,15 @@ compiler path to `CEdev/bin/ez80-clang` and the include path to `CEdev/include` 
 - [x] Add settings menu with render distance and FPS toggle
 - [x] Remove draw time from HUD, add voxel count
 - [x] Add pause menu
-- [ ] Add license (why wasn't this done three years ago...)
-- [ ] Update title edition text
+- [x] Update title edition text
+- [ ] Add entities and items
+- [ ] Make the world editable
+- [ ] Every other turning frame, shift the whole frame (ripoff DLSS)
+- [ ] Add other screens in settings (update, changelog, credits)
 
 ## Changelog
+
+***v1.3.0*** - Calculates fog and render distance based off radius instead of depth, skip projecting rectangle LODs the renderer knows will be hidden (6% FPS improvement), optimized LOD calculations (4% FPS improvement), Added icon, many other minor changes
 
 ***v1.2.1*** - Memory and performance optimizations
 

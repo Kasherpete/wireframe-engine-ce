@@ -8,7 +8,7 @@ ICON = icons/grass.png
 DESCRIPTION = "Minecraft for the TI84+ CE!"
 COMPRESSED = YES
 
-COMPRESSED_MODE = zx7
+COMPRESSED_MODE = zx0
 ARCHIVED = YES
 
 CFLAGS = -Wall -Wextra -O3 -ffast-math

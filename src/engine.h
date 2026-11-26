@@ -101,7 +101,7 @@
 // + 16: every colour byte half sky colour), the ground fades the same way (by depth: it is drawn
 // in bands of rows), and beyond the far plane everything is sky colour, so boxes crossing it fade
 // out instead of popping
-#define FOG_DIST        16
+#define FOG_DIST        20
 #define MAT_FOGGED      16    // added to a material index by project.S
 
 // ---- the circles (radTab, built by setupCamera when a distance changes) ----
